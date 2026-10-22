@@ -14,6 +14,7 @@ struct RootView: View {
         Group {
             if session.isLoggedIn {
                 MainTabView()
+                    .id(session.projectId + ":" + session.accountId)
                     .environmentObject(session)
             } else {
                 LoginView()

@@ -20,6 +20,7 @@ struct ShowerScreenView: View {
 
     @Environment(\.appColors) private var colors
     @Environment(\.isDarkMode) private var isDark
+    @ObservedObject private var backgrounds = BackgroundStore.shared
 
     private var timeText: String {
         let m = elapsedSec / 60
@@ -43,6 +44,7 @@ struct ShowerScreenView: View {
     var body: some View {
         ZStack(alignment: .topLeading) {
             backgroundGradient.ignoresSafeArea()
+            if backgrounds.image(.shower) != nil { AppBackground(scope: .shower) }
 
             ScrollView {
                 VStack(spacing: 0) {
@@ -155,6 +157,7 @@ struct ShowerScreenView: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("返回（不结束用水）")
             .padding(.leading, 8)
             .padding(.top, 8)
         }

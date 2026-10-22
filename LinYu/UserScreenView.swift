@@ -35,14 +35,21 @@ enum UserCardLayout {
     /// 「设置」页默认六张
     static let settingsDefaults: [UserCardType] = [.notify, .trend, .background, .log, .about, .update]
 
-    static func restore(defaults: [UserCardType], saved: String) -> [UserCardType] {
-        guard !saved.isEmpty else { return defaults }
-        let allowed = Set(defaults)
-        var out = saved.split(separator: ",")
-            .compactMap { UserCardType(rawValue: $0.trimmingCharacters(in: .whitespaces)) }
-            .filter { allowed.contains($0) }
-        for d in defaults where !out.contains(d) { out.append(d) }
-        return out
+    // 两页一起恢复：卡片移到另一页后不能按各自默认列表过滤回原页。
+    // 与 Android restorePages 一致，去重后只补充尚未分配的卡片。
+    static func restorePages(profileSaved: String, settingsSaved: String)
+        -> (profile: [UserCardType], settings: [UserCardType]) {
+        func parse(_ saved: String) -> [UserCardType] {
+            saved.split(separator: ",").compactMap {
+                UserCardType(rawValue: $0.trimmingCharacters(in: .whitespacesAndNewlines))
+            }
+        }
+        var assigned = Set<UserCardType>()
+        var profile = parse(profileSaved).filter { assigned.insert($0).inserted }
+        var settings = parse(settingsSaved).filter { assigned.insert($0).inserted }
+        profile += profileDefaults.filter { assigned.insert($0).inserted }
+        settings += settingsDefaults.filter { assigned.insert($0).inserted }
+        return (profile, settings)
     }
 
     static func save(_ list: [UserCardType], key: String) {
@@ -77,6 +84,7 @@ enum UserCardLayout {
 struct UserScreenView: View {
     @EnvironmentObject private var session: Session
     @Environment(\.appColors) private var colors
+    @EnvironmentObject private var store: AppDataStore
 
     @ObservedObject var flow: ShowerFlow
     @ObservedObject var scanner: BLEScanner
@@ -91,16 +99,22 @@ struct UserScreenView: View {
     @State private var showLog = false
     @State private var editMode = false
 
-    @State private var profileOrder: [UserCardType] = UserCardLayout.restore(
-        defaults: UserCardLayout.profileDefaults,
-        saved: UserDefaults.standard.string(forKey: "userProfileCardOrder") ?? ""
-    )
-    @State private var settingsOrder: [UserCardType] = UserCardLayout.restore(
-        defaults: UserCardLayout.settingsDefaults,
-        saved: UserDefaults.standard.string(forKey: "userSettingsCardOrder") ?? ""
-    )
+    @State private var profileOrder: [UserCardType]
+    @State private var settingsOrder: [UserCardType]
     @State private var profileHidden: Set<String> = UserCardLayout.loadHidden("userProfileHiddenCards")
     @State private var settingsHidden: Set<String> = UserCardLayout.loadHidden("userSettingsHiddenCards")
+
+    init(flow: ShowerFlow, scanner: BLEScanner, settingsVisible: Binding<Bool>) {
+        self.flow = flow
+        self.scanner = scanner
+        _settingsVisible = settingsVisible
+        let pages = UserCardLayout.restorePages(
+            profileSaved: UserDefaults.standard.string(forKey: "userProfileCardOrder") ?? "",
+            settingsSaved: UserDefaults.standard.string(forKey: "userSettingsCardOrder") ?? ""
+        )
+        _profileOrder = State(initialValue: pages.profile)
+        _settingsOrder = State(initialValue: pages.settings)
+    }
 
     private var versionText: String {
         let i = Bundle.main.infoDictionary
@@ -110,7 +124,7 @@ struct UserScreenView: View {
 
     var body: some View {
         ZStack {
-            colors.background.ignoresSafeArea()
+            AppBackground()
 
             if showSettings {
                 settingsPage
@@ -119,38 +133,34 @@ struct UserScreenView: View {
             }
         }
         .onAppear { settingsVisible = showSettings }
+        .transaction { $0.animation = nil; $0.disablesAnimations = true }
         .onChange(of: showSettings) { v in settingsVisible = v }
+        .onDisappear { settingsVisible = false }
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 30).onEnded { value in
+                guard showSettings, !showLogoutConfirm, !showLog, value.startLocation.x < 24,
+                      value.translation.width > 80, abs(value.translation.height) < 50 else { return }
+                showSettings = false
+                editMode = false
+            }
+        )
         .sheet(isPresented: $showLog) {
             NavigationStack { LogView() }
         }
-        .overlay {
-            if showLogoutConfirm {
-                // 逐条对照 Android `MainActivity.kt:256-283`：
-                //   canLogout = 没有进行中的订单（ShowerSafetyPolicy.canLogoutVoluntarily）
-                //   标题   能退出「确认退出」/ 不能退出「无法退出」
-                //   正文   能退出「确定退出登录？」/ 不能退出「设备使用中，无法退出」
-                //   确认键 能退出「退出」（error 色）/ 不能退出「返回」（primary 色）
-                //   取消键 只有能退出时才给「取消」
-                let canLogout = flow.activeOrder == nil
-                ConfirmDialogView(
-                    title: canLogout ? "确认退出" : "无法退出",
-                    message: canLogout ? "确定退出登录？" : "设备使用中，无法退出",
-                    confirmTitle: canLogout ? "退出" : "返回",
-                    destructive: canLogout,
-                    // 对照 Android：dismissButton 只有 canLogout 时才给
-                    cancelTitle: canLogout ? "取消" : nil,
-                    onConfirm: {
-                        showLogoutConfirm = false
-                        if canLogout {
-                            showSettings = false
-                            flow.reset()
-                            SavedCredential.clear()
-                            session.logout()
-                        }
-                    },
-                    onDismiss: { showLogoutConfirm = false }
-                )
+        .alert(flow.activeOrder == nil ? "确认退出" : "无法退出", isPresented: $showLogoutConfirm) {
+            if flow.activeOrder == nil {
+                Button("退出", role: .destructive) {
+                    guard flow.activeOrder == nil else { return }
+                    showSettings = false
+                    flow.reset()
+                    session.logout()
+                }
+                Button("取消", role: .cancel) {}
+            } else {
+                Button("返回", role: .cancel) {}
             }
+        } message: {
+            Text(flow.activeOrder == nil ? "确定退出登录？" : "设备使用中，无法退出")
         }
     }
 
@@ -214,7 +224,7 @@ struct UserScreenView: View {
                                 .strokeBorder(colors.danger.opacity(0.5), lineWidth: 1)
                         )
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(InstantButtonStyle())
                 .padding(.top, 8)
 
                 Text(versionText)
@@ -241,7 +251,8 @@ struct UserScreenView: View {
                         .foregroundStyle(colors.textPrimary)
                         .frame(width: 40, height: 40)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(InstantButtonStyle())
+                .accessibilityLabel("返回我的账号")
             }
 
             Text(showBack ? "设置" : "我的账号")
@@ -255,6 +266,7 @@ struct UserScreenView: View {
             }
             .font(.system(size: 14))
             .foregroundStyle(colors.accent)
+            .buttonStyle(InstantButtonStyle())
 
             if !showBack {
                 Button {
@@ -264,7 +276,8 @@ struct UserScreenView: View {
                         .font(.system(size: 20))
                         .frame(width: 40, height: 40)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(InstantButtonStyle())
+                .accessibilityLabel(isDark ? "切换浅色模式" : "切换深色模式")
 
                 Button {
                     showSettings = true
@@ -275,9 +288,12 @@ struct UserScreenView: View {
                         .foregroundStyle(colors.textSecondary)
                         .frame(width: 40, height: 40)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(InstantButtonStyle())
+                .accessibilityLabel("打开设置")
             }
         }
+        .frame(height: PageLayout.titleHeight)
+        .frame(height: PageLayout.headerHeight, alignment: .top)
         .padding(.bottom, 16)
     }
 
@@ -311,12 +327,13 @@ struct UserScreenView: View {
                         editIcon(toOtherIcon, toOtherHint, colors.accent) {
                             onMoveToOther(type)
                         }
-                        editIcon("chevron.up", "上移", index > 0 ? colors.accent : colors.textSecondary.opacity(0.3)) {
+                        editIcon("chevron.up", "上移", index > 0 ? colors.accent : colors.textSecondary.opacity(0.3), enabled: index > 0) {
                             order.wrappedValue = UserCardLayout.move(order.wrappedValue, from: index, to: index - 1)
                             UserCardLayout.save(order.wrappedValue, key: orderKey)
                         }
                         editIcon("chevron.down", "下移",
-                                 index < visible.count - 1 ? colors.accent : colors.textSecondary.opacity(0.3)) {
+                                 index < visible.count - 1 ? colors.accent : colors.textSecondary.opacity(0.3),
+                                 enabled: index < visible.count - 1) {
                             order.wrappedValue = UserCardLayout.move(order.wrappedValue, from: index, to: index + 1)
                             UserCardLayout.save(order.wrappedValue, key: orderKey)
                         }
@@ -345,6 +362,7 @@ struct UserScreenView: View {
         _ symbol: String,
         _ hint: String,
         _ color: Color,
+        enabled: Bool = true,
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
@@ -354,8 +372,9 @@ struct UserScreenView: View {
                 .frame(width: 34, height: 34)
                 .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(InstantButtonStyle())
         .accessibilityLabel(hint)
+        .disabled(!enabled)
     }
 
     @ViewBuilder
@@ -366,7 +385,7 @@ struct UserScreenView: View {
         case .notify: NotifyCardView()
         case .trend: TrendToggleCardView()
         case .background: BackgroundCardView()
-        case .boundRoom: BoundRoomCardView(scanner: scanner)
+        case .boundRoom: BoundRoomCardView(scanner: scanner, store: store)
         case .update: UpdateCardView()
         case .about: AboutCardView()
         case .log: LogCardView { showLog = true }

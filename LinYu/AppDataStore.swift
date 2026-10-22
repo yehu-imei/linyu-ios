@@ -33,6 +33,62 @@ final class AppDataStore: ObservableObject {
     @Published private(set) var deviceInfos: [String: DeviceInfo] = [:]
     /// 正在查询的 snCode，避免同一台设备并发重复请求
     private var resolving: Set<String> = []
+    private var retryAfter: [String: Date] = [:]
+    @Published private(set) var accountInfo: AccountInfo?
+    @Published private(set) var projectName = ""
+    @Published private(set) var useCode: UseCodeData?
+    @Published private(set) var useCodeLoaded = false
+    @Published private(set) var changingUseCodeStatus = false
+    private var loadingProfile = false
+    private var loadingUseCode = false
+    private var profileLoaded = false
+
+    func loadProfileIfNeeded() async {
+        guard !profileLoaded, !loadingProfile else { return }
+        loadingProfile = true
+        defer { loadingProfile = false }
+        async let account = BillService.loadAccountInfo()
+        async let project = BillService.loadProjectInfo()
+        let accountResult = await account
+        if let accountResult { accountInfo = accountResult }
+        let projectInfo = await project
+        if let name = projectInfo?.projectName { projectName = name }
+        profileLoaded = accountInfo != nil && !projectName.isEmpty
+    }
+
+    @discardableResult
+    func loadUseCode(force: Bool = false) async -> Bool {
+        guard !loadingUseCode else { return false }
+        if !force && useCodeLoaded { return true }
+        loadingUseCode = true
+        defer { loadingUseCode = false }
+        do {
+            let raw = try await ApiClient.get("/account/useCode/new", tag: "useCode")
+            useCode = try ApiClient.decode(UseCodeData.self, from: raw, path: "useCode").data
+            useCodeLoaded = true
+            return true
+        } catch {
+            AppLog.shared.w("使用码加载失败：\(error.localizedDescription)")
+            return false
+        }
+    }
+
+    func setUseCodeEnabled(_ enabled: Bool) async throws {
+        guard !changingUseCodeStatus else { return }
+        changingUseCodeStatus = true
+        defer { changingUseCodeStatus = false }
+        let raw = try await ApiClient.post("/account/useCode/new/status/update",
+            form: ["useCodeStatus": enabled ? "1" : "0"], tag: "useCodeStatus")
+        _ = try ApiClient.decode(EmptyData.self, from: raw, path: "useCodeStatus")
+        useCode?.useCodeStatus = enabled ? 1 : 0
+    }
+
+    func acceptUseCode(_ code: String) {
+        useCode = UseCodeData(useCode: code, useCodeStatus: useCode?.useCodeStatus,
+            useCodeRandom: useCode?.useCodeRandom, useCodeStartTime: useCode?.useCodeStartTime,
+            resetAvailability: 0, resetAvailabilityWarMark: "1天只能领取一次使用码")
+        useCodeLoaded = true
+    }
 
     /// 进程内只自动加载一次；之后只有用户下拉刷新才会再请求
     private var didAutoLoad = false
@@ -57,6 +113,7 @@ final class AppDataStore: ObservableObject {
         guard !sn.isEmpty else { return }
         if deviceInfos[sn] != nil { return }
         if resolving.contains(sn) { return }
+        if let retry = retryAfter[sn], retry > Date() { return }
         resolving.insert(sn)
         defer { resolving.remove(sn) }
 
@@ -70,9 +127,11 @@ final class AppDataStore: ObservableObject {
             if resp.success, let info = resp.data {
                 deviceInfos[sn] = info
             } else {
+                retryAfter[sn] = Date().addingTimeInterval(60)
                 AppLog.shared.w("台账查不到 \(sn)（success=true 但 data 为空）")
             }
         } catch {
+            retryAfter[sn] = Date().addingTimeInterval(10)
             AppLog.shared.w("台账请求失败 \(sn)：\(error.localizedDescription)")
         }
     }

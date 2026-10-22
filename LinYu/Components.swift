@@ -1,5 +1,20 @@
 import SwiftUI
 
+/// 无淡出、缩放或系统按压背景；用于箭头、模式切换和卡片编辑。
+struct InstantButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .contentTransition(.identity)
+            .transaction { $0.animation = nil; $0.disablesAnimations = true }
+    }
+}
+
+enum PageLayout {
+    static let titleHeight: CGFloat = 40
+    static let headerHeight: CGFloat = 60
+    static let horizontalInset: CGFloat = 20
+}
+
 // MARK: - 尾部优先省略
 
 /// 单行文本，**尾部优先省略**（保留结尾）。
@@ -97,7 +112,7 @@ struct LinYuToast: View {
     var body: some View {
         HStack(spacing: 12) {
             // 和 Android 一样用 app_logo（`R.drawable.app_logo`，32dp）
-            Image("app_logo")
+            Image("LoginLogo")
                 .resizable()
                 .scaledToFit()
                 .frame(width: 32, height: 32)

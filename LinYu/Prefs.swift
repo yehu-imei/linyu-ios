@@ -123,7 +123,7 @@ enum Prefs {
         set { d.set(newValue, forKey: "trendChartType") }
     }
     static var trendCollapsed: Bool {
-        get { d.object(forKey: "trendCollapsed") as? Bool ?? false }
+        get { d.object(forKey: "trendCollapsed") as? Bool ?? true }
         set { d.set(newValue, forKey: "trendCollapsed") }
     }
 

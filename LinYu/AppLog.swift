@@ -191,7 +191,7 @@ final class AppLog: ObservableObject {
             options: .regularExpression
         )
         // 常见敏感字段：key=value 或 "key":"value"
-        let keys = ["loginCode", "password", "signature", "token", "sign"]
+        let keys = ["loginCode", "password", "oldPassword", "useCode", "code", "smsCode", "signature", "token", "sign"]
         for k in keys {
             // form: key=xxx&
             out = out.replacingOccurrences(

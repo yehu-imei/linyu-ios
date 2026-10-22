@@ -24,6 +24,7 @@ struct MainScreenView: View {
     @ObservedObject var store: AppDataStore
     /// 由 MainTabView 注入，用水页也在那一层切换
     @ObservedObject var flow: ShowerFlow
+    let onResumeOrder: () -> Void
 
     /// snCode → 台账
     @State private var resolved: [String: DeviceInfo] = [:]
@@ -36,7 +37,7 @@ struct MainScreenView: View {
     
     
     /// 寝室筛选条件（ViewModel 的等价物：改完要立刻刷新列表）
-    @State private var boundRoom = Prefs.boundRoom
+    @AppStorage("boundRoom") private var boundRoom = ""
     /// 下拉刷新中
     @State private var refreshing = false
 
@@ -44,7 +45,10 @@ struct MainScreenView: View {
 
     /// 能解析出 snCode 的设备（解析不出来的不是这批水表）
     private var scanned: [DiscoveredPeripheral] {
-        scanner.devices.filter { $0.parsedSnCode != nil }
+        scanner.devices.filter { device in
+            guard let sn = device.parsedSnCode else { return false }
+            return store.deviceInfos[sn] != nil
+        }
     }
 
     /// 按寝室筛选后的列表
@@ -70,13 +74,12 @@ struct MainScreenView: View {
 
     var body: some View {
         ZStack {
-            colors.background.ignoresSafeArea()
+            AppBackground()
 
             ScrollView {
                 LazyVStack(spacing: 16) {
                     // ⚠️ 顶部留白和账单页 / 我的页一致（都是 20），
                     // 否则三个 tab 的标题不在同一高度
-                    Color.clear.frame(height: 20)
                     header
 
                     // 使用中的设备
@@ -109,11 +112,16 @@ struct MainScreenView: View {
                     Color.clear.frame(height: 110)   // 给悬浮导航栏留位置
                 }
                 .padding(.horizontal, 20)
+                .padding(.top, 20)
             }
             // ⚠️ 裁剪：不加的话滚动时内容会画到状态栏/导航栏区域上，
             // 表现为「文字盖住状态栏」。Android 那边是 statusBarsPadding() 保证的，
             // iOS 靠「内容留在安全区内 + 这里裁掉溢出」等价实现。
             .clipped()
+            .refreshable {
+                await refreshAll()
+                if flow.activeOrder == nil { scanner.start() }
+            }
         }
         .sheet(isPresented: $showLog) {
             NavigationStack { LogView() }
@@ -135,7 +143,10 @@ struct MainScreenView: View {
             // 之前每次切回首页都重新 start()，而 start() 会清空列表，
             // 于是设备先闪回广播名（KLCXKJ-Water）再变回房间名。
             // Android 那边是下拉刷新才重新扫描。
-            if scanner.devices.isEmpty { scanner.start() }
+            if scanner.devices.isEmpty && flow.activeOrder == nil { scanner.start() }
+            for device in scanner.devices {
+                if let sn = device.parsedSnCode { await resolveDevice(sn) }
+            }
         }
         .onChange(of: scanner.devices) { list in
             for d in list {
@@ -164,42 +175,17 @@ struct MainScreenView: View {
                 onConfirm: { confirmOpen(d) }
             )
         }
-
-        if flow.isStarting {
-            OpeningDialogView(progress: flow.openingText)
-        }
-
-        if let msg = flow.errorMessage {
-            ShowerErrorDialogView(message: msg) { flow.clearError() }
-        }
-
-        if let d = flow.bleConfirmDevice {
-            BleRetryDialogView(
-                deviceName: d.displayName,
-                onConfirm: { Task { await flow.confirmBleOpen() } },
-                onDismiss: { flow.dismissBleConfirm() }
-            )
-        }
-
-        if let notice = flow.autoClose {
-            AutoCloseDialogView(
-                deviceName: notice.deviceName,
-                elapsedSeconds: notice.elapsedSeconds,
-                consumed: notice.consumed,
-                loading: notice.loading,
-                onConfirm: { flow.dismissAutoClose() }
-            )
-        }
     }
 
     // MARK: - 顶部
 
     private var header: some View {
-        HStack(alignment: .center) {
+        HStack(alignment: .top) {
             VStack(alignment: .leading, spacing: 0) {
                 Text("淋浴")
                     .font(.system(size: 30, weight: .bold))
                     .foregroundStyle(colors.textPrimary)
+                    .frame(height: PageLayout.titleHeight)
                 Text("Hualala")
                     .font(.system(size: 14))
                     .foregroundStyle(colors.textSecondary)
@@ -211,15 +197,22 @@ struct MainScreenView: View {
                 } content: {
                     VectorIconView(icon: DeviceIcons.qrScanner, size: 20, tint: colors.textPrimary)
                 }
+                .accessibilityLabel("扫码绑定设备")
                 circleIconButton {
-                    Task { await refreshAll(); scanner.start() }
+                    Task {
+                        await refreshAll()
+                        if flow.activeOrder == nil { scanner.start() }
+                    }
                 } content: {
                     Image(systemName: "arrow.clockwise")
                         .font(.system(size: 17, weight: .medium))
                         .foregroundStyle(colors.textPrimary)
                 }
+                .disabled(refreshing)
+                .accessibilityLabel("刷新附近设备")
             }
         }
+        .frame(height: PageLayout.headerHeight, alignment: .top)
     }
 
     private func circleIconButton<C: View>(
@@ -279,8 +272,7 @@ struct MainScreenView: View {
             Spacer(minLength: 0)
 
             Button("恢复") {
-                // 已经在用这一单，直接回到用水页（activeOrder 本来就在）
-                flow.toast = "正在使用中"
+                onResumeOrder()
             }
             .buttonStyle(AccentButtonStyle(colors: colors))
         }
@@ -366,7 +358,7 @@ struct MainScreenView: View {
                     .font(.system(size: 12))
                     .foregroundStyle(colors.textSecondary)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(InstantButtonStyle())
             Spacer()
         }
     }
@@ -378,7 +370,7 @@ struct MainScreenView: View {
                     .tint(colors.accent)
                     .scaleEffect(0.65)
                     .frame(width: 14, height: 14)
-                Text(scanner.stateText.isEmpty ? "扫描中..." : scanner.stateText)
+                Text("扫描中...")
                     .font(.system(size: 13))
                     .foregroundStyle(colors.textSecondary)
             }
@@ -461,6 +453,7 @@ struct MainScreenView: View {
     /// 查台账。结果存在 `AppDataStore` 里（跨页面保留），
     /// 所以切走再切回来**不会**再显示一次广播名
     private func resolveDevice(_ sn: String) async {
+        defer { resolving.remove(sn) }
         await store.deviceInfo(sn)
     }
 
@@ -482,6 +475,11 @@ struct MainScreenView: View {
 
     /// 详情弹窗里点了「开始使用」
     private func confirmOpen(_ device: DeviceInfo) {
+        detailDevice = nil
+        if isDeviceActive(device) {
+            onResumeOrder()
+            return
+        }
         let sn = device.snCode ?? ""
         let peripheral = scanner.peripheral(forSn: sn)
         let central = scanner.manager

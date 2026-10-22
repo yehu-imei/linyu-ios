@@ -16,16 +16,18 @@ struct MainTabView: View {
     @StateObject private var store = AppDataStore()
     /// 扫描器放在容器里：首页展示列表、「我的 → 绑定寝室」读附近设备，共用同一份结果
     @StateObject private var scanner = BLEScanner()
+    @ObservedObject private var backgrounds = BackgroundStore.shared
     /// 进「我的 → 设置」时隐藏底部导航（Android 也是这么做的）
     @State private var settingsVisible = false
+    @State private var showerMinimized = false
     /// 从首页改完设置（寝室筛选等）要让首页刷新，用一个计数器触发
     @State private var refreshToken = 0
 
     var body: some View {
         ZStack(alignment: .bottom) {
-            colors.background.ignoresSafeArea()
+            AppBackground(scope: flow.activeOrder != nil && !showerMinimized ? .shower : .home)
 
-            if let order = flow.activeOrder {
+            if let order = flow.activeOrder, !showerMinimized {
                 ShowerScreenView(
                     emoji: order.device.typeEmoji,
                     statusText: order.device.statusText,
@@ -35,14 +37,22 @@ struct MainTabView: View {
                     autoDisConSec: order.autoDisConRemain,
                     isStopping: flow.isStopping,
                     onStop: { Task { await flow.close() } },
-                    onMinimize: {}
+                    onMinimize: minimizeShower
                 )
-                .transition(.opacity)
+                .simultaneousGesture(
+                    DragGesture(minimumDistance: 30).onEnded { value in
+                        guard value.startLocation.x < 24, value.translation.width > 80,
+                              abs(value.translation.height) < 50 else { return }
+                        minimizeShower()
+                    }
+                )
+                .transition(.identity)
             } else {
                 Group {
                     switch tab {
                     case 0:
-                        MainScreenView(scanner: scanner, store: store, flow: flow)
+                        MainScreenView(scanner: scanner, store: store, flow: flow,
+                                       onResumeOrder: { showerMinimized = false })
                             .id(refreshToken)
                     case 1:
                         WalletScreenView(store: store, flow: flow)
@@ -51,18 +61,14 @@ struct MainTabView: View {
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                // ⚠️ 只做透明度交叉淡入，**不做位移动画**。
-                // 之前用 .move(edge:) 时，切页瞬间新旧两页同时在屏幕上横向滑动，
-                // 滚动中的长列表会拖出残影，看着像界面被"平移"了一下。
-                // Android 那边的页面是各自独立的 ScrollView、切换由 AnimatedContent
-                // 整体替换，不会有两页并存的观感；iOS 用淡入淡出最接近。
-                .transition(.opacity)
+                // 页面直接切换，不做交叉渐隐。
+                .transition(.identity)
 
                 if !settingsVisible {
                     PillNavBar(currentTab: $tab, colors: colors)
                         .padding(.bottom, 22)
                         .padding(.horizontal, 24)
-                        .transition(.opacity)
+                        .transition(.identity)
                 }
             }
 
@@ -91,12 +97,57 @@ struct MainTabView: View {
         // 于是「消费趋势折叠」被套上渐隐、「我的 → 编辑」里卡片上下移动被套上
         // 位移动画 —— 用户看到的就是「残影 / 平移」。
         // 需要的动画各自在**自己的视图上**声明（导航栏滑块、Toast 已有）。
-        // 页面切换本身靠上面 Group 的 .transition(.opacity) 完成。
+        .overlay { flowDialogs }
+        .environmentObject(store)
+        .environment(\.appColors, backgrounds.colors(colors, scope: flow.activeOrder != nil && !showerMinimized ? .shower : .home))
+        .task {
+            if Prefs.notifyEnabled { _ = await AppNotifications.shared.requestPermission() }
+        }
+        .onChange(of: flow.activeOrder?.startedAt) { _ in
+            showerMinimized = false
+            settingsVisible = false
+            if flow.activeOrder == nil { tab = 0 }
+        }
         .onChange(of: flow.toast) { value in
             guard let msg = value, !msg.isEmpty else { return }
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.4) {
                 // 只在还是同一条消息时才清，避免把后来的新消息误关
                 if flow.toast == msg { flow.toast = nil }
+            }
+        }
+    }
+
+    private func minimizeShower() {
+        tab = 0
+        settingsVisible = false
+        showerMinimized = true
+    }
+
+    // 用水页返回后可以查看账单和设置，业务提示必须跨页面可见。
+    @ViewBuilder
+    private var flowDialogs: some View {
+        ZStack {
+            if flow.isStarting {
+                OpeningDialogView(progress: flow.openingText)
+            }
+            if let msg = flow.errorMessage {
+                ShowerErrorDialogView(message: msg) { flow.clearError() }
+            }
+            if let device = flow.bleConfirmDevice {
+                BleRetryDialogView(
+                    deviceName: device.displayName,
+                    onConfirm: { Task { await flow.confirmBleOpen() } },
+                    onDismiss: { flow.dismissBleConfirm() }
+                )
+            }
+            if let notice = flow.autoClose {
+                AutoCloseDialogView(
+                    deviceName: notice.deviceName,
+                    elapsedSeconds: notice.elapsedSeconds,
+                    consumed: notice.consumed,
+                    loading: notice.loading,
+                    onConfirm: { flow.dismissAutoClose() }
+                )
             }
         }
     }

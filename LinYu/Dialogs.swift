@@ -16,7 +16,8 @@ struct DialogScrim<Content: View>: View {
             Color.black.opacity(0.38)
                 .ignoresSafeArea()
                 .onTapGesture { onTapOutside?() }
-                .allowsHitTesting(onTapOutside != nil)
+                // 不允许点外部关闭的弹窗也必须挡住底层按钮。
+                .allowsHitTesting(true)
 
             content
                 .padding(.horizontal, 28)

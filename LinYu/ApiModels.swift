@@ -339,7 +339,7 @@ struct ConsumeResultData: Decodable {
 struct UseCodeData: Decodable {
     let useCode: String?
     /// 1 = 开启，0 = 关闭
-    let useCodeStatus: Int?
+    var useCodeStatus: Int?
     /// 手机号后三位（和 useCode 末三位相同）
     let useCodeRandom: String?
     let useCodeStartTime: String?

@@ -515,6 +515,9 @@ final class ShowerFlow: ObservableObject {
 
     /// 结算完成：记金额、弹提示（或自动关停弹窗）
     private func finishWithAmount(_ yuan: Double?, autoClosed: Bool, deviceName: String) {
+        AppNotifications.shared.finished(device: deviceName,
+            elapsed: autoClosed ? lastAutoCloseElapsed : lastClosedElapsed,
+            amount: yuan, automatic: autoClosed)
         lastConsumeYuan = yuan
         if let yuan, yuan > 0 { Prefs.lastConsumeYuan = yuan }
 

@@ -27,7 +27,7 @@ struct WalletScreenView: View {
 
     var body: some View {
         ZStack {
-            colors.background.ignoresSafeArea()
+            AppBackground()
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
@@ -35,6 +35,8 @@ struct WalletScreenView: View {
                     Text(BalanceEstimator.title)
                         .font(.system(size: 22, weight: .bold))
                         .foregroundStyle(colors.textPrimary)
+                        .frame(height: PageLayout.titleHeight)
+                        .frame(height: PageLayout.headerHeight, alignment: .top)
 
                     balanceCard
                         .padding(.top, 16)
@@ -117,7 +119,7 @@ struct WalletScreenView: View {
                             .padding(.horizontal, 6)
                             .padding(.vertical, 4)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(InstantButtonStyle())
                 }
             }
 

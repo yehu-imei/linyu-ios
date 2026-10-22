@@ -61,11 +61,12 @@ struct InfoRow: View {
 // MARK: - 账号信息
 
 struct AccountCardView: View {
+    @EnvironmentObject private var store: AppDataStore
     @EnvironmentObject private var session: Session
     @Environment(\.appColors) private var colors
 
-    @State private var info: AccountInfo?
-    @State private var projectName: String = ""
+    private var info: AccountInfo? { store.accountInfo }
+    private var projectName: String { store.projectName }
     @State private var manageExpanded = false
     @State private var showChangePhone = false
     @State private var showChangePassword = false
@@ -110,22 +111,19 @@ struct AccountCardView: View {
             }
         }
         .task {
-            info = await BillService.loadAccountInfo()
-            projectName = await BillService.loadProjectInfo()?.projectName ?? ""
+            await store.loadProfileIfNeeded()
         }
-        .overlay {
-            if showChangePhone {
+        .sheet(isPresented: $showChangePhone) {
                 ChangePhoneDialog(
                     currentPhone: Session.shared.telephone,
                     onDismiss: { showChangePhone = false }
                 )
-            }
-            if showChangePassword {
+        }
+        .sheet(isPresented: $showChangePassword) {
                 ChangePasswordDialog(
                     currentPhone: Session.shared.telephone,
                     onDismiss: { showChangePassword = false }
                 )
-            }
         }
     }
 }
@@ -134,176 +132,67 @@ struct AccountCardView: View {
 
 /// 使用码 —— 逐条对照 Android `UseCodeSection.UseCodeCard`。
 struct UseCodeCardView: View {
+    @EnvironmentObject private var store: AppDataStore
     @Environment(\.appColors) private var colors
-    @State private var data: UseCodeData?
-    @State private var loaded = false
-    @State private var codeOn = false
+    @State private var showRedeem = false
     @State private var redeemExpanded = false
-
-    private var code: String? { data?.useCode }
-    /// resetAvailability == 0 = 今天已经领过了，服务端不让再领。
-    /// 没拉到数据时是 null，按「可以点」处理——让请求自己去报错，好过凭空禁用
-    private var canRedeem: Bool { data?.resetAvailability != 0 }
-
+    @State private var errorText: String?
+    private var code: String { store.useCode?.useCode ?? "" }
     var body: some View {
         BaseCard {
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 10) {
                 HStack {
-                    Text("使用码")
-                        .font(.system(size: 13))
-                        .foregroundStyle(colors.textSecondary)
+                    Text("使用码").font(.system(size: 13))
                     Spacer()
-                    Text("后三位为手机号后三位")
-                        .font(.system(size: 11))
-                        .foregroundStyle(colors.textSecondary)
-                }
-
-                // 区分「加载中」和「尚未领取」：没领过码的人 useCode 是 null，
-                // 一律显示「加载中...」的话永远等不到
+                    Text("后三位为手机号后三位").font(.system(size: 11))
+                }.foregroundStyle(colors.textSecondary)
                 Group {
-                    if let code, !code.isEmpty {
-                        let prefix = String(code.dropLast(3))
-                        let suffix = String(code.suffix(3))
-                        (Text(prefix).foregroundColor(colors.textPrimary)
-                         + Text(suffix).foregroundColor(colors.accent))
-                            .font(.system(size: 28, weight: .black))
-                            .tracking(6)
-                    } else if loaded {
-                        Text("尚未领取")
-                            .font(.system(size: 28, weight: .black))
-                            .tracking(6)
-                            .foregroundStyle(colors.textSecondary)
+                    if !code.isEmpty {
+                        (Text(String(code.dropLast(3))).foregroundColor(colors.textPrimary)
+                         + Text(String(code.suffix(3))).foregroundColor(colors.accent))
                     } else {
-                        Text("加载中...")
-                            .font(.system(size: 28, weight: .black))
-                            .tracking(6)
-                            .foregroundStyle(colors.textPrimary)
+                        Text(store.useCodeLoaded ? "尚未领取" : "加载中...")
                     }
-                }
-                .padding(.top, 2)
-
-                HStack {
-                    Text(codeOn ? "使用码已开启" : "使用码已关闭")
-                        .font(.system(size: 12))
-                        .foregroundStyle(colors.textSecondary)
-                    Spacer()
-                    Toggle("", isOn: $codeOn)
-                        .labelsHidden()
-                        .tint(colors.accent)
-                        .onChange(of: codeOn) { v in Task { await updateStatus(v) } }
-                }
-                .padding(.top, 4)
-
-                Text("在热水器物理键盘上输入此码")
-                    .font(.system(size: 12))
+                }.font(.system(size: 28, weight: .black)).tracking(6)
+                Toggle(store.useCode?.useCodeStatus == 1 ? "使用码已开启" : "使用码已关闭",
+                       isOn: Binding(get: { store.useCode?.useCodeStatus == 1 }, set: { enabled in
+                    Task {
+                        do { try await store.setUseCodeEnabled(enabled) }
+                        catch { errorText = error.localizedDescription }
+                    }
+                }))
+                .font(.system(size: 12)).tint(colors.accent)
+                .disabled(!store.useCodeLoaded || code.isEmpty || store.changingUseCodeStatus)
+                Text("在热水器物理键盘上输入此码").font(.system(size: 12))
                     .foregroundStyle(colors.textSecondary)
-
-                // 领取入口收起。⚠️ 今天已领过时**按钮照样能点**（照搬 Android）：
-                // 置灰虽然「正确」，但用户看不懂为什么不给点；让他点、然后服务端
-                // 回一句「1天只能领取一次使用码」，比一个灰按钮说得多
-                Divider()
-                    .background(colors.border)
-                    .padding(.top, 12)
-
-                Button {
+                Divider().padding(.top, 12)
+                CollapsibleHeader(title: code.isEmpty ? "领取使用码" : "重新领取", expanded: redeemExpanded) {
                     redeemExpanded.toggle()
-                } label: {
-                    HStack {
-                        Text(code?.isEmpty == false ? "重新领取" : "领取使用码")
-                            .font(.system(size: 13))
-                            .foregroundStyle(colors.textPrimary)
-                        Spacer()
-                        Image(systemName: redeemExpanded ? "chevron.up" : "chevron.down")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(colors.textSecondary)
-                    }
-                    .padding(.vertical, 8)
-                    .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
-
                 if redeemExpanded {
-                    if !canRedeem, let warn = data?.resetAvailabilityWarMark {
-                        Text(warn)
-                            .font(.system(size: 11))
-                            .foregroundStyle(colors.textSecondary)
-                            .frame(maxWidth: .infinity, alignment: .center)
-                    }
-                    Button {
-                        Task { await redeem() }
-                    } label: {
-                        Text("领取")
-                            .font(.system(size: 14))
-                            .foregroundStyle(.white)
+                    if store.useCode?.resetAvailability == 0, let warning = store.useCode?.resetAvailabilityWarMark {
+                        Text(warning).font(.system(size: 11)).foregroundStyle(colors.textSecondary)
                             .frame(maxWidth: .infinity)
-                            .frame(height: 44)
-                            .background(colors.accent)
-                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                     }
-                    .buttonStyle(.plain)
+                    Button("领取") { showRedeem = true }
+                        .frame(maxWidth: .infinity)
+                        .buttonStyle(AccentButtonStyle(colors: colors, radius: 12, height: 44))
+                        .disabled(!store.useCodeLoaded)
                 }
             }
         }
-        .task { await load() }
-    }
-
-    private func load() async {
-        // 进程级缓存：切回「我的」页不用再等一次网络
-        if let c = UserPageCache.useCode {
-            data = c
-            codeOn = c.useCodeStatus == 1
-            loaded = true
-            return
+        .task { await store.loadUseCode() }
+        .sheet(isPresented: $showRedeem) {
+            UseCodeRedeemView().environmentObject(store)
         }
-        do {
-            let raw = try await ApiClient.get("/account/useCode/new", tag: "useCode")
-            let resp = try ApiClient.decode(UseCodeData.self, from: raw, path: "useCode")
-            data = resp.data
-            codeOn = resp.data?.useCodeStatus == 1
-            UserPageCache.useCode = resp.data
-        } catch {
-            AppLog.shared.w("使用码加载失败：\(error.localizedDescription)")
-        }
-        loaded = true
-    }
-
-    private func updateStatus(_ on: Bool) async {
-        do {
-            _ = try await ApiClient.post(
-                "/account/useCode/new/status/update",
-                form: ["useCodeStatus": on ? "1" : "0"],
-                tag: "useCodeStatus"
-            )
-        } catch {
-            // 失败要把开关拨回去，否则界面在说谎
-            codeOn = !on
-            AppLog.shared.w("使用码状态更新失败：\(error.localizedDescription)")
-        }
-    }
-
-    /// 重新领取。服务端不给时会用 `resetAvailabilityWarMark` 说明原因
-    /// （实测是「1天只能领取一次使用码」）
-    private func redeem() async {
-        do {
-            let raw = try await ApiClient.get("/account/useCode/new", tag: "useCodeRedeem")
-            let resp = try ApiClient.decode(UseCodeData.self, from: raw, path: "useCodeRedeem")
-            data = resp.data
-            UserPageCache.useCode = resp.data
-            if let c = resp.data { codeOn = c.useCodeStatus == 1 }
-            if let warn = resp.data?.resetAvailabilityWarMark, resp.data?.resetAvailability == 0 {
-                AppLog.shared.w("领取使用码：\(warn)")
-            }
-        } catch {
-            AppLog.shared.w("领取使用码失败：\(error.localizedDescription)")
-        }
+        .alert("操作失败", isPresented: Binding(get: { errorText != nil }, set: { if !$0 { errorText = nil } })) {
+            Button("知道了", role: .cancel) { errorText = nil }
+        } message: { Text(errorText ?? "") }
     }
 }
 
 // MARK: - 通知设置
 
-/// ⚠️ iOS 的平台限制必须说清楚：Android 那套「App 被杀也继续监控、发现水被外部关掉就通知」
-/// 依赖前台服务，iOS 做不到。所以这里的开关**只影响 App 在前台/刚回前台时的提示**，
-/// 界面上要如实写明，不能让用户以为关掉/打开就等于安卓端的效果。
 /// 通知设置卡片 —— 逐条对照 Android `UserSettingsCards.NotifyCard`。
 struct NotifyCardView: View {
     @Environment(\.appColors) private var colors
@@ -335,13 +224,20 @@ struct NotifyCardView: View {
                     Toggle("", isOn: $enabled)
                         .labelsHidden()
                         .tint(colors.accent)
-                        .onChange(of: enabled) { v in Prefs.notifyEnabled = v }
+                        .onChange(of: enabled) { value in
+                            Prefs.notifyEnabled = value
+                            if value {
+                                Task {
+                                    if !(await AppNotifications.shared.requestPermission()) { enabled = false }
+                                }
+                            } else { AppNotifications.shared.clear() }
+                        }
                 }
 
                 if enabled {
                     // ── 展开入口 ──
                     Button {
-                        withAnimation(.easeInOut(duration: 0.18)) { expanded.toggle() }
+                        expanded.toggle()
                     } label: {
                         HStack {
                             Text("详细设置")
@@ -355,7 +251,7 @@ struct NotifyCardView: View {
                         .padding(.vertical, 8)
                         .contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(InstantButtonStyle())
                     .padding(.top, 10)
 
                     if expanded {
@@ -427,11 +323,10 @@ struct TrendToggleCardView: View {
 
 /// 背景装扮 —— 逐条对照 Android `UserScreen.BackgroundCard`。
 ///
-/// Android 点「更换」会进 `CustomBackgroundScreen`；iOS 这边暂未实现取色与
-/// 背景渲染，但**按钮和文案保持一致**，点了提示「暂未支持」而不是干脆不画。
+/// 主页和使用页分别保存图片与效果。
 struct BackgroundCardView: View {
     @Environment(\.appColors) private var colors
-    @State private var unsupported = false
+    @State private var showBackground = false
 
     var body: some View {
         BaseCard {
@@ -440,13 +335,13 @@ struct BackgroundCardView: View {
                     Text("背景装扮")
                         .font(.system(size: 16, weight: .semibold))
                         .foregroundStyle(colors.textPrimary)
-                    Text(unsupported ? "使用自己的图片打造专属界面" : "使用自己的图片打造专属界面")
+                    Text("使用自己的图片打造专属界面")
                         .font(.system(size: 12))
                         .foregroundStyle(colors.textSecondary)
                 }
                 Spacer()
                 Button {
-                    unsupported = true
+                    showBackground = true
                 } label: {
                     Text("更换")
                         .font(.system(size: 14))
@@ -456,9 +351,10 @@ struct BackgroundCardView: View {
                         .background(colors.accent)
                         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(InstantButtonStyle())
             }
         }
+        .sheet(isPresented: $showBackground) { CustomBackgroundView() }
     }
 }
 
@@ -471,9 +367,10 @@ struct BackgroundCardView: View {
 struct BoundRoomCardView: View {
     @Environment(\.appColors) private var colors
     @ObservedObject var scanner: BLEScanner
+    @ObservedObject var store: AppDataStore
 
     /// ⚠️ 读 Prefs 的**当前值**：首页的筛选也读同一个值，改完两边立刻一致
-    @State private var boundRoom = Prefs.boundRoom
+    @AppStorage("boundRoom") private var boundRoom = ""
     @State private var showPicker = false
 
     /// 附近可选的寝室键（一间一条；同一间的两台设备算出来本来就相等）
@@ -481,10 +378,11 @@ struct BoundRoomCardView: View {
         var seen = Set<String>()
         var out: [String] = []
         for d in scanner.devices {
-            guard let key = DeviceInfo.roomKey(d.name), seen.insert(key).inserted else { continue }
+            guard let sn = d.parsedSnCode, let name = store.deviceInfos[sn]?.deviceName,
+                  let key = DeviceInfo.roomKey(name), seen.insert(key).inserted else { continue }
             out.append(key)
         }
-        return out
+        return out.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
     }
 
     var body: some View {
@@ -511,7 +409,7 @@ struct BoundRoomCardView: View {
                                 .font(.system(size: 12))
                                 .foregroundStyle(colors.danger)
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(InstantButtonStyle())
                     }
                 } else {
                     Text("未绑定寝室，设备列表将显示全部设备")
@@ -532,7 +430,7 @@ struct BoundRoomCardView: View {
                                 .strokeBorder(colors.border, lineWidth: 1)
                         )
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(InstantButtonStyle())
                 .padding(.top, 4)
             }
         }
@@ -608,7 +506,7 @@ struct LogCardView: View {
 /// Star 数来自 GitHub API；拉不到就**省略**，不显示假数据。
 struct AboutCardView: View {
     @Environment(\.appColors) private var colors
-    @State private var stars: Int?
+    @State private var stars: Int? = UserPageCache.stars
 
     var body: some View {
         BaseCard {
@@ -616,6 +514,7 @@ struct AboutCardView: View {
                 Text("关于项目")
                     .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(colors.textPrimary)
+                    .padding(.bottom, 4)
 
                 Text("一款趣智校园第三方客户端")
                     .font(.system(size: 13))
@@ -650,7 +549,7 @@ struct AboutCardView: View {
                         .background(colors.accent)
                         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(InstantButtonStyle())
                 .padding(.top, 8)
             }
         }
@@ -671,8 +570,6 @@ struct AboutCardView: View {
 /// 表现为「卡片先空一下再出现内容」。
 enum UserPageCache {
     static var stars: Int?
-    /// 使用码（含 status / resetAvailability），领取后要跟着更新
-    static var useCode: UseCodeData?
 }
 
 enum GithubInfo {
@@ -759,7 +656,7 @@ struct UpdateCardView: View {
                                     .strokeBorder(colors.border, lineWidth: 1)
                             )
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(InstantButtonStyle())
                     .disabled(checking)
                 }
             }

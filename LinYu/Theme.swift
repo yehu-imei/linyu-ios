@@ -11,7 +11,7 @@ struct AppColorSet {
     let card: Color
     let solidSurface: Color
     let primary: Color
-    let accent: Color
+    var accent: Color
     let textPrimary: Color
     let textSecondary: Color
     let success: Color
