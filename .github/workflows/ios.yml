@@ -24,6 +24,11 @@ jobs:
       - name: 安装 XcodeGen
         run: brew install xcodegen
 
+      - name: 账单缓存回归检查
+        run: |
+          swiftc -swift-version 5 -parse-as-library LinYu/ApiModels.swift LinYu/BillService.swift LinYu/AppDataStore.swift Tests/DataStoreSupport.swift Tests/DataStoreRegression.swift -o "$RUNNER_TEMP/linyu-data-tests"
+          "$RUNNER_TEMP/linyu-data-tests"
+
       - name: 生成 Xcode 工程
         run: xcodegen generate
 
