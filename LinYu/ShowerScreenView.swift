@@ -49,8 +49,10 @@ struct ShowerScreenView: View {
             ScrollView {
                 VStack(spacing: 0) {
                     // 72pt 图标（和 Android 的 `DeviceGlyph(emoji, 72.sp, 72.dp)` 同尺寸）
-                    PlainGlyph(emoji: emoji, size: 72, tint: .white)
-                        .padding(.bottom, 8)
+                    if backgrounds.image(.shower) == nil {
+                        PlainGlyph(emoji: emoji, size: 72, tint: .white)
+                            .padding(.bottom, 8)
+                    }
 
                     Text(statusText)
                         .font(.system(size: 22, weight: .bold))

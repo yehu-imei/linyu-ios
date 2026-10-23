@@ -61,6 +61,7 @@ struct InfoRow: View {
 // MARK: - 账号信息
 
 struct AccountCardView: View {
+    @EnvironmentObject private var presentation: UserPresentation
     @EnvironmentObject private var store: AppDataStore
     @EnvironmentObject private var session: Session
     @Environment(\.appColors) private var colors
@@ -68,14 +69,20 @@ struct AccountCardView: View {
     private var info: AccountInfo? { store.accountInfo }
     private var projectName: String { store.projectName }
     @State private var manageExpanded = false
-    @State private var showChangePhone = false
-    @State private var showChangePassword = false
 
     var body: some View {
         BaseCard {
             VStack(alignment: .leading, spacing: 10) {
-                // 没值就整行不显示（写死「未设置」既像报错又占位置，
-                // 而学校没同步姓名是服务端的事，用户改不了）
+                if !store.profileLoaded {
+                    ForEach(["姓名", "手机号", "学校", "学号"], id: \.self) { label in
+                        InfoRow(label: label, value: "加载中...")
+                            .redacted(reason: .placeholder)
+                    }
+                    if let error = store.profileError {
+                        Button(error) { Task { await store.loadProfileIfNeeded() } }
+                            .font(.system(size: 12)).foregroundStyle(colors.accent)
+                    }
+                } else {
                 if let name = info?.name, !name.isEmpty {
                     InfoRow(label: "姓名", value: name)
                 }
@@ -85,6 +92,7 @@ struct AccountCardView: View {
                 }
                 if let sid = info?.idCardNumber, !sid.isEmpty {
                     InfoRow(label: "学号", value: sid)
+                }
                 }
 
                 Divider().overlay(colors.border)
@@ -98,11 +106,11 @@ struct AccountCardView: View {
                     // 对照 Android：两个入口并排（`Arrangement.SpaceEvenly`）
                     HStack {
                         Spacer()
-                        Button("更换手机号") { showChangePhone = true }
+                        Button("更换手机号") { presentation.dialog = .phone }
                             .font(.system(size: 13))
                             .foregroundStyle(colors.accent)
                         Spacer()
-                        Button("修改密码") { showChangePassword = true }
+                        Button("修改密码") { presentation.dialog = .password }
                             .font(.system(size: 13))
                             .foregroundStyle(colors.accent)
                         Spacer()
@@ -113,18 +121,7 @@ struct AccountCardView: View {
         .task {
             await store.loadProfileIfNeeded()
         }
-        .sheet(isPresented: $showChangePhone) {
-                ChangePhoneDialog(
-                    currentPhone: Session.shared.telephone,
-                    onDismiss: { showChangePhone = false }
-                )
-        }
-        .sheet(isPresented: $showChangePassword) {
-                ChangePasswordDialog(
-                    currentPhone: Session.shared.telephone,
-                    onDismiss: { showChangePassword = false }
-                )
-        }
+
     }
 }
 
@@ -132,9 +129,9 @@ struct AccountCardView: View {
 
 /// 使用码 —— 逐条对照 Android `UseCodeSection.UseCodeCard`。
 struct UseCodeCardView: View {
+    @EnvironmentObject private var presentation: UserPresentation
     @EnvironmentObject private var store: AppDataStore
     @Environment(\.appColors) private var colors
-    @State private var showRedeem = false
     @State private var redeemExpanded = false
     @State private var errorText: String?
     private var code: String { store.useCode?.useCode ?? "" }
@@ -174,7 +171,7 @@ struct UseCodeCardView: View {
                         Text(warning).font(.system(size: 11)).foregroundStyle(colors.textSecondary)
                             .frame(maxWidth: .infinity)
                     }
-                    Button("领取") { showRedeem = true }
+                    Button("领取") { presentation.dialog = .useCode }
                         .frame(maxWidth: .infinity)
                         .buttonStyle(AccentButtonStyle(colors: colors, radius: 12, height: 44))
                         .disabled(!store.useCodeLoaded)
@@ -182,9 +179,6 @@ struct UseCodeCardView: View {
             }
         }
         .task { await store.loadUseCode() }
-        .sheet(isPresented: $showRedeem) {
-            UseCodeRedeemView().environmentObject(store)
-        }
         .alert("操作失败", isPresented: Binding(get: { errorText != nil }, set: { if !$0 { errorText = nil } })) {
             Button("知道了", role: .cancel) { errorText = nil }
         } message: { Text(errorText ?? "") }
@@ -326,7 +320,7 @@ struct TrendToggleCardView: View {
 /// 主页和使用页分别保存图片与效果。
 struct BackgroundCardView: View {
     @Environment(\.appColors) private var colors
-    @State private var showBackground = false
+    @EnvironmentObject private var presentation: UserPresentation
 
     var body: some View {
         BaseCard {
@@ -341,7 +335,7 @@ struct BackgroundCardView: View {
                 }
                 Spacer()
                 Button {
-                    showBackground = true
+                    presentation.page = .background
                 } label: {
                     Text("更换")
                         .font(.system(size: 14))
@@ -354,7 +348,6 @@ struct BackgroundCardView: View {
                 .buttonStyle(InstantButtonStyle())
             }
         }
-        .sheet(isPresented: $showBackground) { CustomBackgroundView() }
     }
 }
 
@@ -371,19 +364,7 @@ struct BoundRoomCardView: View {
 
     /// ⚠️ 读 Prefs 的**当前值**：首页的筛选也读同一个值，改完两边立刻一致
     @AppStorage("boundRoom") private var boundRoom = ""
-    @State private var showPicker = false
-
-    /// 附近可选的寝室键（一间一条；同一间的两台设备算出来本来就相等）
-    private var roomKeys: [String] {
-        var seen = Set<String>()
-        var out: [String] = []
-        for d in scanner.devices {
-            guard let sn = d.parsedSnCode, let name = store.deviceInfos[sn]?.deviceName,
-                  let key = DeviceInfo.roomKey(name), seen.insert(key).inserted else { continue }
-            out.append(key)
-        }
-        return out.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
-    }
+    @EnvironmentObject private var presentation: UserPresentation
 
     var body: some View {
         BaseCard {
@@ -418,7 +399,7 @@ struct BoundRoomCardView: View {
                 }
 
                 Button {
-                    showPicker = true
+                    presentation.dialog = .room
                 } label: {
                     Text("选择附近")
                         .font(.system(size: 14))
@@ -434,43 +415,7 @@ struct BoundRoomCardView: View {
                 .padding(.top, 4)
             }
         }
-        .sheet(isPresented: $showPicker) {
-            NavigationStack {
-                List {
-                    if roomKeys.isEmpty {
-                        Text("附近还没有扫到设备，先去首页扫描一次")
-                            .font(.system(size: 13))
-                            .foregroundStyle(colors.textSecondary)
-                    } else {
-                        ForEach(roomKeys, id: \.self) { key in
-                            Button {
-                                Prefs.boundRoom = key
-                                boundRoom = key
-                                showPicker = false
-                            } label: {
-                                HStack {
-                                    Text(key)
-                                        .font(.system(size: 15))
-                                        .foregroundStyle(colors.textPrimary)
-                                    Spacer()
-                                    if key == boundRoom {
-                                        Image(systemName: "checkmark")
-                                            .foregroundStyle(colors.accent)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                .navigationTitle("选择寝室")
-                .toolbar {
-                    ToolbarItem(placement: .navigationBarTrailing) {
-                        Button("关闭") { showPicker = false }
-                    }
-                }
-            }
-            .environment(\.appColors, colors)
-        }
+
     }
 }
 
@@ -586,125 +531,5 @@ enum GithubInfo {
             AppLog.shared.w("拉取仓库信息失败：\(error.localizedDescription)")
             return nil
         }
-    }
-}
-
-// MARK: - 软件更新
-
-/// iOS 不能像 Android 那样下载 APK 自安装，所以这里只做「检查 + 打开下载页」。
-/// 也不能假装能更新——写清楚是「到 GitHub 下载」。
-struct UpdateCardView: View {
-    @Environment(\.appColors) private var colors
-
-    @State private var latestTag: String?
-    @State private var latestURL: String?
-    @State private var checking = false
-    @State private var checked = false
-
-    /// .ipa 安装教程。iOS 侧载要自签，必须看教程才知道怎么做
-    private static let tutorialURL = URL(
-        string: "https://github.com/yehu-imei/Guides/blob/main/Tutorial/.ipa%E7%9A%84%E5%AE%89%E8%A3%85"
-    )
-
-    private var currentVersion: String {
-        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0"
-    }
-
-    private var hasUpdate: Bool {
-        guard let tag = latestTag else { return false }
-        return tag.trimmingCharacters(in: CharacterSet(charactersIn: "vV")) != currentVersion
-            && compareVersion(tag, currentVersion) > 0
-    }
-
-    var body: some View {
-        BaseCard {
-            HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("软件更新")
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(colors.textPrimary)
-                    Text(statusText)
-                        .font(.system(size: 12))
-                        .foregroundStyle(colors.textSecondary)
-                }
-                Spacer()
-                // ⚠️ iOS **不能像 Android 那样下载 apk 直接覆盖安装**——
-                // 侧载 ipa 必须自己签名（7 天还得重签），给用户一个下载链接
-                // 等于给个装不上的文件。所以这里不提供「去下载」，
-                // 一律指向安装教程。
-                if let u = Self.tutorialURL {
-                    Link(destination: u) {
-                        Text("看教程")
-                            .font(.system(size: 14, weight: .medium))
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 16)
-                            .frame(height: 40)
-                            .background(colors.accent)
-                            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                    }
-                } else {
-                    Button {
-                        Task { await check() }
-                    } label: {
-                        Text(checking ? "检查中…" : "检查")
-                            .font(.system(size: 14, weight: .medium))
-                            .foregroundStyle(colors.accent)
-                            .padding(.horizontal, 16)
-                            .frame(height: 40)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                    .strokeBorder(colors.border, lineWidth: 1)
-                            )
-                    }
-                    .buttonStyle(InstantButtonStyle())
-                    .disabled(checking)
-                }
-            }
-        }
-        .task {
-            if !checked { await check() }
-        }
-    }
-
-    private var statusText: String {
-        if let tag = latestTag {
-            return hasUpdate ? "有新版本 \(tag)（当前 \(currentVersion)）" : "已是最新（\(currentVersion)）"
-        }
-        return checked ? "检查失败，请稍后再试" : "当前 \(currentVersion)"
-    }
-
-    private func check() async {
-        checking = true
-        defer {
-            checking = false
-            checked = true
-        }
-        do {
-            var req = URLRequest(url: URL(string: "https://api.github.com/repos/yehu-imei/linyu/releases/latest")!)
-            req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
-            let (data, _) = try await URLSession.shared.data(for: req)
-            if let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                latestTag = obj["tag_name"] as? String
-                latestURL = obj["html_url"] as? String
-            }
-        } catch {
-            AppLog.shared.w("检查更新失败：\(error.localizedDescription)")
-        }
-    }
-
-    /// `v3.1.0` vs `3.0.5` → 3.1.0 更新
-    private func compareVersion(_ a: String, _ b: String) -> Int {
-        let clean: (String) -> [Int] = { s in
-            s.trimmingCharacters(in: CharacterSet(charactersIn: "vV"))
-                .split(separator: ".")
-                .map { Int($0.prefix(while: \.isNumber)) ?? 0 }
-        }
-        let x = clean(a), y = clean(b)
-        for i in 0 ..< max(x.count, y.count) {
-            let l = i < x.count ? x[i] : 0
-            let r = i < y.count ? y[i] : 0
-            if l != r { return l > r ? 1 : -1 }
-        }
-        return 0
     }
 }

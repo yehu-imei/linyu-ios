@@ -30,6 +30,7 @@ final class BackgroundStore: ObservableObject {
             .appendingPathComponent("background-\(scope.rawValue).jpg")
     }
     func image(_ scope: BackgroundScope) -> UIImage? { images[scope] }
+    func themeColor(_ scope: BackgroundScope) -> Color? { accents[scope].map { Color(uiColor: $0) } }
     func colors(_ base: AppColorSet, scope: BackgroundScope) -> AppColorSet {
         guard let color = accents[scope] else { return base }
         var hue: CGFloat = 0, saturation: CGFloat = 0, brightness: CGFloat = 0, alpha: CGFloat = 0
@@ -97,7 +98,8 @@ struct AppBackground: View {
 }
 
 struct CustomBackgroundView: View {
-    @Environment(\.dismiss) private var dismiss
+    let onBack: () -> Void
+    @Environment(\.appColors) private var colors
     @ObservedObject private var backgrounds = BackgroundStore.shared
     @State private var scope: BackgroundScope = .home
     @State private var selection: PhotosPickerItem?
@@ -105,45 +107,74 @@ struct CustomBackgroundView: View {
     @State private var resetConfirm = false
     @State private var errorText: String?
     var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(spacing: 20) {
-                    Picker("页面", selection: $scope) { Text("主页").tag(BackgroundScope.home); Text("使用页").tag(BackgroundScope.shower) }
-                        .pickerStyle(.segmented).disabled(loading)
-                    Text(scope == .home ? "应用于：首页 / 账单 / 我的" : "应用于：洗澡中的使用页").font(.footnote)
-                    ZStack {
-                        AppBackground(scope: scope)
-                        VStack {
-                            Text(backgrounds.image(scope) == nil ? "未设置背景" : "示例卡片").font(.headline)
-                            Text("文字在背景上的可读性效果").font(.footnote)
-                        }.padding(20).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 22))
-                    }.frame(height: 200).clipShape(RoundedRectangle(cornerRadius: 22))
+        ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    HStack(spacing: 0) {
+                        Button(action: onBack) {
+                            Image(systemName: "arrow.left")
+                                .font(.system(size: 20))
+                                .frame(width: 48, height: 48)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("返回")
+                        .disabled(loading)
+                        Text("自定义背景").font(.system(size: 20, weight: .bold))
+                    }
+                    .foregroundStyle(colors.textPrimary)
+                    .padding(.bottom, 12)
+                    HStack(spacing: 10) {
+                        scopeChip("主页", value: .home)
+                        scopeChip("使用页", value: .shower)
+                    }
+                    .disabled(loading)
+                    Text(scope == .home ? "应用于：首页 / 账单 / 我的" : "应用于：洗澡中的使用页")
+                        .font(.system(size: 12)).foregroundStyle(colors.textSecondary)
+                        .padding(.top, 6).padding(.bottom, 14)
+                    preview
+                        .padding(.bottom, 16)
                     PhotosPicker(selection: $selection, matching: .images) {
                         Text(backgrounds.image(scope) == nil ? "选择背景图片" : "更换背景图片")
-                    }.disabled(loading)
-                    HStack {
-                        Text("主题色")
-                        Spacer()
-                        Text(backgrounds.image(scope) == nil ? "使用默认强调色" : "已根据图片自动提取").font(.footnote)
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundStyle(.white)
+                            .frame(maxWidth: .infinity).padding(.vertical, 12)
+                            .background(colors.accent, in: RoundedRectangle(cornerRadius: 14))
                     }
-                    adjustment("透明度", keyPath: \.opacity, range: 0.2...1)
-                    adjustment("模糊度", keyPath: \.blur, range: 0...20)
-                    adjustment("亮度", keyPath: \.brightness, range: 0.4...1.5)
-                    Button("恢复默认背景", role: .destructive) { resetConfirm = true }.disabled(loading)
+                    .buttonStyle(.plain).disabled(loading)
+                    if backgrounds.image(scope) != nil {
+                        HStack(spacing: 0) {
+                            Text("主题色").font(.system(size: 13))
+                            Circle().fill(backgrounds.themeColor(scope) ?? colors.accent)
+                                .frame(width: 20, height: 20).padding(.leading, 10).padding(.trailing, 8)
+                                .accessibilityLabel("图片主题色")
+                            Text(backgrounds.themeColor(scope) == nil ? "使用默认强调色" : "已根据图片自动提取")
+                                .font(.system(size: 12))
+                        }
+                        .foregroundStyle(colors.textSecondary)
+                        .padding(.top, 20).padding(.bottom, 8)
+                        adjustment("透明度", keyPath: \.opacity, range: 0.2...1, percentage: true)
+                        adjustment("模糊度", keyPath: \.blur, range: 0...20, percentage: false)
+                        adjustment("亮度", keyPath: \.brightness, range: 0.4...1.5, percentage: true)
+                    }
+                    Button { resetConfirm = true } label: {
+                        Text("恢复默认背景（仅当前页面）")
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundStyle(colors.danger)
+                            .frame(maxWidth: .infinity).padding(.vertical, 12)
+                            .overlay(RoundedRectangle(cornerRadius: 14).stroke(colors.border, lineWidth: 1))
+                    }
+                    .buttonStyle(.plain).disabled(loading).padding(.top, 24)
                     if loading { ProgressView() }
                     if let errorText { Text(errorText).foregroundStyle(.red) }
-                }.padding(20)
+                }.padding(20).padding(.bottom, 60)
             }
-            .navigationTitle("自定义背景").navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() }.disabled(loading) } }
+            .background(colors.solidSurface.ignoresSafeArea())
+            .ignoresSafeArea(.container, edges: .bottom)
             .alert("恢复默认背景？", isPresented: $resetConfirm) {
                 Button("取消", role: .cancel) {}
-                Button("恢复", role: .destructive) {
+                Button("恢复默认", role: .destructive) {
                     do { try backgrounds.reset(scope) } catch { errorText = error.localizedDescription }
                 }
             } message: { Text("这将移除当前页面的自定义背景及相关效果。\n不会影响深色 / 浅色模式。") }
-        }
-        .interactiveDismissDisabled(loading)
         .onChange(of: selection) { item in
             guard let item else { return }
             let destination = scope
@@ -158,13 +189,59 @@ struct CustomBackgroundView: View {
             }
         }
     }
-    private func adjustment(_ title: String, keyPath: WritableKeyPath<BackgroundOptions, Double>, range: ClosedRange<Double>) -> some View {
-        VStack(alignment: .leading) {
-            Text(title)
+    private func scopeChip(_ title: String, value: BackgroundScope) -> some View {
+        Button { scope = value } label: {
+            Text(title).font(.system(size: 14, weight: .medium))
+                .foregroundStyle(scope == value ? Color.white : colors.textPrimary)
+                .frame(maxWidth: .infinity).padding(.vertical, 10)
+                .background(scope == value ? colors.accent : colors.card, in: RoundedRectangle(cornerRadius: 12))
+                .overlay(RoundedRectangle(cornerRadius: 12).stroke(colors.border, lineWidth: 0.8))
+        }.buttonStyle(.plain)
+        .accessibilityAddTraits(scope == value ? .isSelected : [])
+    }
+
+    private var preview: some View {
+        GeometryReader { geometry in
+            ZStack {
+                colors.background
+                if let image = backgrounds.image(scope) {
+                    let settings = backgrounds.settings(scope)
+                    Image(uiImage: image).resizable().scaledToFill()
+                        .frame(width: geometry.size.width, height: geometry.size.height)
+                        .brightness(settings.brightness - 1).blur(radius: settings.blur)
+                        .opacity(settings.opacity)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("示例卡片").font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(colors.textPrimary)
+                        Text("文字在背景上的可读性效果").font(.system(size: 12))
+                            .foregroundStyle(colors.textSecondary)
+                    }
+                    .padding(14)
+                    .frame(width: geometry.size.width * 0.7 - 32, alignment: .leading)
+                    .background(colors.card, in: RoundedRectangle(cornerRadius: 14))
+                    .overlay(RoundedRectangle(cornerRadius: 14).stroke(colors.border, lineWidth: 0.8))
+                } else {
+                    Text("未设置背景").foregroundStyle(colors.textSecondary)
+                }
+            }.frame(width: geometry.size.width, height: geometry.size.height)
+        }
+        .frame(height: 200).clipShape(RoundedRectangle(cornerRadius: 18))
+    }
+
+    private func adjustment(_ title: String, keyPath: WritableKeyPath<BackgroundOptions, Double>, range: ClosedRange<Double>, percentage: Bool) -> some View {
+        let value = backgrounds.settings(scope)[keyPath: keyPath]
+        let display = percentage ? String(format: "%.0f%%", value * 100) : String(format: "%.0f", value)
+        return VStack(alignment: .leading) {
+            HStack {
+                Text(title).foregroundStyle(colors.textSecondary)
+                Spacer()
+                Text(display).foregroundStyle(colors.textPrimary).monospacedDigit()
+            }.font(.system(size: 13))
             Slider(value: Binding(get: { backgrounds.settings(scope)[keyPath: keyPath] }, set: { value in
                 var options = backgrounds.settings(scope); options[keyPath: keyPath] = value
                 backgrounds.update(scope, options)
-            }), in: range)
-        }
+            }), in: range).tint(colors.accent)
+                .accessibilityLabel(title).accessibilityValue(display)
+        }.padding(.vertical, 6)
     }
 }

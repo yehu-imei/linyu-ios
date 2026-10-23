@@ -367,7 +367,7 @@ final class ShowerFlow: ObservableObject {
             Task { await settleCloud(order) }
         case let .unconfirmed(msg):
             // 没有证据 = 水可能还在流。留在页面让用户重试
-            toast = "没能确认设备已关闭（\(msg)），请检查网络后重试"
+            toast = "没能确认设备已关闭，请检查网络后重试"
             startTimer()
         case let .failed(msg):
             toast = msg
@@ -535,7 +535,7 @@ final class ShowerFlow: ObservableObject {
         if let yuan {
             toast = yuan > 0
                 ? "已停止，本次消费 \(MoneyFormat.withSymbol(yuan))"
-                : "已停止，本次无消费（\(lastClosedElapsed)秒）"
+                : "热水器已关闭，本次无消费"
         } else {
             // nil = 还不知道，不是没花钱
             toast = "已停止，消费金额稍后可在账单中查看"

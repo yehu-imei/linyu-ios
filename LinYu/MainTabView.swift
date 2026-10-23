@@ -14,6 +14,7 @@ struct MainTabView: View {
     @StateObject private var flow = ShowerFlow()
     /// 账单/余额缓存（对照 Android 的 MainViewModel：跨页面存活，切换不重载）
     @StateObject private var store = AppDataStore()
+    @StateObject private var userPresentation = UserPresentation()
     /// 扫描器放在容器里：首页展示列表、「我的 → 绑定寝室」读附近设备，共用同一份结果
     @StateObject private var scanner = BLEScanner()
     @ObservedObject private var backgrounds = BackgroundStore.shared
@@ -61,6 +62,7 @@ struct MainTabView: View {
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .ignoresSafeArea(.container, edges: .bottom)
                 // 页面直接切换，不做交叉渐隐。
                 .transition(.identity)
 
@@ -90,6 +92,7 @@ struct MainTabView: View {
                         .allowsHitTesting(false)
                     Spacer()
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 .animation(.easeInOut(duration: 0.18), value: toast)
             }
         }
@@ -98,11 +101,17 @@ struct MainTabView: View {
         // 位移动画 —— 用户看到的就是「残影 / 平移」。
         // 需要的动画各自在**自己的视图上**声明（导航栏滑块、Toast 已有）。
         .overlay { flowDialogs }
+        .overlay { UserDialogs(scanner: scanner) { flow.toast = "已绑定寝室：\($0)" } }
         .environmentObject(store)
+        .environmentObject(userPresentation)
         .environment(\.appColors, backgrounds.colors(colors, scope: flow.activeOrder != nil && !showerMinimized ? .shower : .home))
         .task {
             if Prefs.notifyEnabled { _ = await AppNotifications.shared.requestPermission() }
         }
+        .task { await store.loadProfileIfNeeded() }
+        .task { await store.loadUseCode() }
+        .onDisappear { store.cancelRequests() }
+        .onChange(of: flow.lastConsumeYuan) { _ in Task { await store.reload() } }
         .onChange(of: flow.activeOrder?.startedAt) { _ in
             showerMinimized = false
             settingsVisible = false
@@ -121,6 +130,7 @@ struct MainTabView: View {
         tab = 0
         settingsVisible = false
         showerMinimized = true
+        flow.toast = "已返回主页，设备仍在运行"
     }
 
     // 用水页返回后可以查看账单和设置，业务提示必须跨页面可见。

@@ -122,7 +122,8 @@ struct LinYuToast: View {
                 .font(.system(size: 14, weight: .medium))
                 .foregroundColor(.white)
                 .lineLimit(1)
-                .fixedSize(horizontal: true, vertical: false)
+                .minimumScaleFactor(0.8)
+                .truncationMode(.head)
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 16)
@@ -131,7 +132,7 @@ struct LinYuToast: View {
         .shadow(color: .black.opacity(0.25), radius: 8, y: 2)
         .padding(.horizontal, 24)
         // 宽度上限：超长文案（「已绑定寝室：龙川北苑-3号楼南-3层-320」）要能截断
-        .frame(maxWidth: 420, alignment: .leading)
+        .frame(maxWidth: 420, alignment: .center)
     }
 }
 

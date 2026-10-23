@@ -9,6 +9,11 @@ enum BillService {
     /// 月初打开 App 会看到空列表（像是「没消费过」），而消费趋势里 7 天视图也会缺数据。
     /// Android 那边同样拉 3 个月（`for (i in 0..2)`）。
     static func loadHistory() async -> [BillDTO] {
+        (try? await loadHistoryChecked()) ?? []
+    }
+
+    /// 页面缓存只能接受完整的成功结果，不能把失败或取消当作空账单。
+    static func loadHistoryChecked() async throws -> [BillDTO] {
         let fmt = DateFormatter()
         fmt.locale = Locale(identifier: "en_US_POSIX")
         fmt.dateFormat = "yyyy-MM"
@@ -18,10 +23,11 @@ enum BillService {
 
         var all: [BillDTO] = []
         for i in 0 ..< 3 {
-            let month = fmt.string(from: Date().addingTimeInterval(TimeInterval(-i) * 30 * 24 * 3600))
-            if let list = try? await loadMonth(month) {
-                all.append(contentsOf: list)
-            }
+            try Task.checkCancellation()
+            let date = cal.date(byAdding: .month, value: -i, to: Date()) ?? Date()
+            let month = fmt.string(from: date)
+            let list = try await loadMonth(month)
+            all.append(contentsOf: list)
         }
         AppLog.shared.i("账单：拉取 \(all.count) 条（最近 3 个月）")
         return all

@@ -30,7 +30,6 @@ struct MainScreenView: View {
     @State private var resolved: [String: DeviceInfo] = [:]
     @State private var resolving: Set<String> = []
     @State private var detailDevice: DeviceInfo?
-    @State private var showLog = false
     @State private var showQr = false
 
     /// 账单（余额估算要用）
@@ -122,9 +121,6 @@ struct MainScreenView: View {
                 await refreshAll()
                 if flow.activeOrder == nil { scanner.start() }
             }
-        }
-        .sheet(isPresented: $showLog) {
-            NavigationStack { LogView() }
         }
         .fullScreenCover(isPresented: $showQr) {
             QrScanView { sn in

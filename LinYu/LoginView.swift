@@ -145,7 +145,7 @@ struct LoginView: View {
 
             if !isSmsMode {
                 Button("使用已保存的密码") {
-                    systemPasswords.choose { user, secret in
+                    systemPasswords.choose(onFailure: { errorText = $0 }) { user, secret in
                         phone = user
                         password = secret
                     }
@@ -184,7 +184,7 @@ struct LoginView: View {
             title: "手机号",
             text: $phone,
             systemImage: "phone.fill",
-            keyboard: .numberPad,
+            keyboard: isSmsMode ? .numberPad : .default,
             secured: false
         )
     }

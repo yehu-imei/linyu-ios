@@ -7,7 +7,8 @@ private struct GeneratedUseCode: Decodable {
 
 struct UseCodeRedeemView: View {
     @EnvironmentObject private var store: AppDataStore
-    @Environment(\.dismiss) private var dismiss
+    @Environment(\.appColors) private var colors
+    let onDismiss: () -> Void
     @State private var candidate = ""
     @State private var expires = Date.distantPast
     @State private var remainTimes: Int?
@@ -18,40 +19,56 @@ struct UseCodeRedeemView: View {
     @State private var retryToken = 0
     private var unavailable: Bool { store.useCode?.resetAvailability == 0 }
 
+    private var title: String {
+        eligibilityLoaded && unavailable ? "无法领取" : (store.useCode?.useCode?.isEmpty == false ? "重新领取使用码" : "领取使用码")
+    }
+
     var body: some View {
-        NavigationStack {
-            Form {
-                if checking {
-                    ProgressView("加载中...")
-                } else if !eligibilityLoaded {
-                    Text("获取失败，请重试")
-                    Button("重试") { retryToken += 1 }
-                } else if unavailable {
-                    Text(store.useCode?.resetAvailabilityWarMark ?? "1天只能领取一次使用码")
-                    Button("知道了") { dismiss() }
-                } else {
-                    if let current = store.useCode?.useCode { LabeledContent("当前使用码", value: current) }
-                    LabeledContent("领取后替换为", value: candidate.isEmpty ? "—" : candidate)
-                    TimelineView(.periodic(from: .now, by: 1)) { context in
-                        let seconds = max(0, Int(expires.timeIntervalSince(context.date)))
-                        if !candidate.isEmpty {
-                            Text(seconds == 0 ? "已超时，请重新换一个" : String(format: "请在 %d:%02d 内领取", seconds / 60, seconds % 60))
+        DialogScrim(onTapOutside: { if !busy { onDismiss() } }) {
+            AlertCard(title: title, titleAlign: .leading) {
+                VStack(alignment: .leading, spacing: 12) {
+                    if checking {
+                        ProgressView("加载中...")
+                    } else if !eligibilityLoaded {
+                        Text("获取失败，请重试")
+                        Button("重试") { retryToken += 1 }
+                    } else if unavailable {
+                        Text(store.useCode?.resetAvailabilityWarMark ?? "1天只能领取一次使用码")
+                    } else {
+                        if let current = store.useCode?.useCode {
+                            Text("当前使用码：\(current)").font(.system(size: 13))
                         }
-                        Button(busy ? "领取中…" : "确定领取") { Task { await redeem() } }
-                            .disabled(busy || candidate.isEmpty || seconds == 0)
+                        Text("领取后替换为").font(.system(size: 13))
+                        Text(candidate.isEmpty ? "—" : candidate)
+                            .font(.system(size: 28, weight: .bold)).tracking(4)
+                            .foregroundStyle(colors.accent)
+                        TimelineView(.periodic(from: .now, by: 1)) { context in
+                            let seconds = max(0, Int(expires.timeIntervalSince(context.date)))
+                            if !candidate.isEmpty {
+                                Text(seconds == 0 ? "已超时，请重新换一个" : String(format: "请在 %d:%02d 内领取", seconds / 60, seconds % 60))
+                                    .font(.system(size: 12))
+                            }
+                        }
+                        if let remainTimes { Text("今日还能换 \(remainTimes) 次").font(.system(size: 12)) }
+                        Button(busy ? "换码中" : (candidate.isEmpty ? "获取" : "换一个")) {
+                            Task { await generate() }
+                        }.disabled(busy || remainTimes == 0)
+                        if let errorText { Text(errorText).font(.system(size: 12)).foregroundStyle(colors.danger) }
                     }
-                    if let remainTimes { Text("今日还能换 \(remainTimes) 次") }
-                    Button(busy ? "换码中" : (candidate.isEmpty ? "获取" : "换一个")) {
-                        Task { await generate() }
-                    }.disabled(busy || remainTimes == 0)
-                    if let errorText { Text(errorText).foregroundStyle(.red) }
+                }.foregroundStyle(colors.textSecondary)
+            } actions: {
+                DialogTextButton(title: unavailable && eligibilityLoaded ? "知道了" : "取消", color: colors.accent, enabled: !busy) { onDismiss() }
+                if eligibilityLoaded && !unavailable {
+                    TimelineView(.periodic(from: .now, by: 1)) { context in
+                        DialogTextButton(title: busy ? "领取中…" : "确定领取", color: colors.accent,
+                            enabled: !busy && !candidate.isEmpty && expires > context.date) {
+                            Task { await redeem() }
+                        }
+                    }
                 }
             }
-            .navigationTitle(eligibilityLoaded && unavailable ? "无法领取" : (store.useCode?.useCode?.isEmpty == false ? "重新领取使用码" : "领取使用码"))
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() }.disabled(busy) } }
         }
-        .interactiveDismissDisabled(busy)
+        .buttonStyle(InstantButtonStyle())
         .task(id: retryToken) { await prepare() }
     }
 
@@ -90,7 +107,7 @@ struct UseCodeRedeemView: View {
             _ = try ApiClient.decode(EmptyData.self, from: raw, path: "setUseCode")
             store.acceptUseCode(candidate)
             await store.loadUseCode(force: true)
-            dismiss()
+            onDismiss()
         } catch { errorText = error.localizedDescription }
     }
 }

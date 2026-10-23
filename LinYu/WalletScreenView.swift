@@ -62,18 +62,26 @@ struct WalletScreenView: View {
                             Spacer()
                         }
                         .padding(24)
-                    } else if recent.isEmpty {
+                    } else if recent.isEmpty && store.billsError != nil {
+                        Button("获取账单失败，请重试") { Task { await store.reload() } }
+                            .foregroundStyle(colors.accent).padding(.top, 12)
+                    } else if recent.isEmpty && store.loaded {
                         Text("暂无账单数据")
                             .font(.system(size: 14))
                             .foregroundStyle(colors.textSecondary)
                             .padding(.top, 12)
-                    } else {
+                    } else if !recent.isEmpty {
                         VStack(spacing: 8) {
                             ForEach(recent) { bill in
                                 billCard(bill)
                             }
                         }
                         .padding(.top, 12)
+                    }
+
+                    if !recent.isEmpty, let error = store.billsError {
+                        Button(error) { Task { await store.reload() } }
+                            .foregroundStyle(colors.accent).padding(.top, 12)
                     }
 
                     Color.clear.frame(height: 100)   // 给悬浮导航栏留位置

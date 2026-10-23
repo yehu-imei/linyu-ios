@@ -85,6 +85,7 @@ struct UserScreenView: View {
     @EnvironmentObject private var session: Session
     @Environment(\.appColors) private var colors
     @EnvironmentObject private var store: AppDataStore
+    @EnvironmentObject private var presentation: UserPresentation
 
     @ObservedObject var flow: ShowerFlow
     @ObservedObject var scanner: BLEScanner
@@ -96,7 +97,6 @@ struct UserScreenView: View {
     @State private var showSettings = false
     /// 退出登录确认（对照 Android `MainActivity.showLogoutConfirm`）
     @State private var showLogoutConfirm = false
-    @State private var showLog = false
     @State private var editMode = false
 
     @State private var profileOrder: [UserCardType]
@@ -126,27 +126,32 @@ struct UserScreenView: View {
         ZStack {
             AppBackground()
 
-            if showSettings {
+            if let page = presentation.page {
+                switch page {
+                case .background: CustomBackgroundView(onBack: { presentation.page = nil })
+                case .log: LogView(onBack: { presentation.page = nil })
+                }
+            } else if showSettings {
                 settingsPage
             } else {
                 profilePage
             }
         }
-        .onAppear { settingsVisible = showSettings }
+        .onAppear { settingsVisible = showSettings || presentation.page != nil }
         .transaction { $0.animation = nil; $0.disablesAnimations = true }
-        .onChange(of: showSettings) { v in settingsVisible = v }
+        .onChange(of: showSettings) { v in settingsVisible = v || presentation.page != nil }
+        .onChange(of: presentation.page) { page in settingsVisible = showSettings || page != nil }
         .onDisappear { settingsVisible = false }
         .simultaneousGesture(
             DragGesture(minimumDistance: 30).onEnded { value in
-                guard showSettings, !showLogoutConfirm, !showLog, value.startLocation.x < 24,
+                guard !showLogoutConfirm, presentation.dialog == nil, value.startLocation.x < 24,
                       value.translation.width > 80, abs(value.translation.height) < 50 else { return }
+                if presentation.page != nil { presentation.page = nil; return }
+                guard showSettings else { return }
                 showSettings = false
                 editMode = false
             }
         )
-        .sheet(isPresented: $showLog) {
-            NavigationStack { LogView() }
-        }
         .alert(flow.activeOrder == nil ? "确认退出" : "无法退出", isPresented: $showLogoutConfirm) {
             if flow.activeOrder == nil {
                 Button("退出", role: .destructive) {
@@ -386,9 +391,9 @@ struct UserScreenView: View {
         case .trend: TrendToggleCardView()
         case .background: BackgroundCardView()
         case .boundRoom: BoundRoomCardView(scanner: scanner, store: store)
-        case .update: UpdateCardView()
+        case .update: SoftwareUpdateCard()
         case .about: AboutCardView()
-        case .log: LogCardView { showLog = true }
+        case .log: LogCardView { presentation.page = .log }
         }
     }
 

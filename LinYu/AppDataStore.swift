@@ -24,6 +24,7 @@ final class AppDataStore: ObservableObject {
     /// ⚠️ 有了它才能区分「还没加载」和「加载完是空的」——
     /// 账单真的为空时不能一直转圈，也不能拿空数组去算出一个假的余额。
     @Published private(set) var loaded = false
+    @Published private(set) var billsError: String?
 
     /// 台账（snCode → DeviceInfo）。
     ///
@@ -39,38 +40,54 @@ final class AppDataStore: ObservableObject {
     @Published private(set) var useCode: UseCodeData?
     @Published private(set) var useCodeLoaded = false
     @Published private(set) var changingUseCodeStatus = false
-    private var loadingProfile = false
-    private var loadingUseCode = false
-    private var profileLoaded = false
+    @Published private(set) var profileLoaded = false
+    @Published private(set) var profileError: String?
+    private var profileTask: Task<Void, Never>?
+    private var useCodeTask: Task<Bool, Never>?
+    private var billsTask: Task<Void, Never>?
 
     func loadProfileIfNeeded() async {
-        guard !profileLoaded, !loadingProfile else { return }
-        loadingProfile = true
-        defer { loadingProfile = false }
-        async let account = BillService.loadAccountInfo()
-        async let project = BillService.loadProjectInfo()
-        let accountResult = await account
-        if let accountResult { accountInfo = accountResult }
-        let projectInfo = await project
-        if let name = projectInfo?.projectName { projectName = name }
-        profileLoaded = accountInfo != nil && !projectName.isEmpty
+        guard !profileLoaded else { return }
+        if let profileTask { await profileTask.value; return }
+        let task = Task { @MainActor in
+            defer { self.profileTask = nil }
+            self.profileError = nil
+            async let account = BillService.loadAccountInfo()
+            async let project = BillService.loadProjectInfo()
+            let (accountResult, projectResult) = await (account, project)
+            guard !Task.isCancelled else { return }
+            guard let accountResult, let projectResult else {
+                self.profileError = "获取个人信息失败，请重试"
+                return
+            }
+            self.accountInfo = accountResult
+            self.projectName = projectResult.projectName ?? ""
+            self.profileLoaded = true
+        }
+        profileTask = task
+        await task.value
     }
 
     @discardableResult
     func loadUseCode(force: Bool = false) async -> Bool {
-        guard !loadingUseCode else { return false }
+        if let useCodeTask { return await useCodeTask.value }
         if !force && useCodeLoaded { return true }
-        loadingUseCode = true
-        defer { loadingUseCode = false }
-        do {
-            let raw = try await ApiClient.get("/account/useCode/new", tag: "useCode")
-            useCode = try ApiClient.decode(UseCodeData.self, from: raw, path: "useCode").data
-            useCodeLoaded = true
-            return true
-        } catch {
-            AppLog.shared.w("使用码加载失败：\(error.localizedDescription)")
-            return false
+        let task = Task { @MainActor in
+            defer { self.useCodeTask = nil }
+            do {
+                let raw = try await ApiClient.get("/account/useCode/new", tag: "useCode")
+                let result = try ApiClient.decode(UseCodeData.self, from: raw, path: "useCode").data
+                try Task.checkCancellation()
+                self.useCode = result
+                self.useCodeLoaded = true
+                return true
+            } catch {
+                AppLog.shared.w("使用码加载失败：\(error.localizedDescription)")
+                return false
+            }
         }
+        useCodeTask = task
+        return await task.value
     }
 
     func setUseCodeEnabled(_ enabled: Bool) async throws {
@@ -90,12 +107,8 @@ final class AppDataStore: ObservableObject {
         useCodeLoaded = true
     }
 
-    /// 进程内只自动加载一次；之后只有用户下拉刷新才会再请求
-    private var didAutoLoad = false
-
     func loadIfNeeded() async {
-        guard !didAutoLoad else { return }
-        didAutoLoad = true
+        guard !loaded else { return }
         await reload()
     }
 
@@ -138,14 +151,30 @@ final class AppDataStore: ObservableObject {
 
     /// 显式刷新（下拉 / 结算完成后刷新账单）
     func reload() async {
-        if loading { return }
+        if let billsTask { await billsTask.value; return }
         loading = true
-        defer { loading = false }
+        let task = Task { @MainActor in
+            defer { self.loading = false; self.billsTask = nil }
+            self.billsError = nil
+            await BillService.refreshBalances()
+            do {
+                let result = try await BillService.loadHistoryChecked()
+                try Task.checkCancellation()
+                self.bills = result
+                self.loaded = true
+            } catch {
+                guard !Task.isCancelled else { return }
+                self.billsError = "获取账单失败，请重试"
+                AppLog.shared.w("账单刷新失败，保留已有数据：\(error.localizedDescription)")
+            }
+        }
+        billsTask = task
+        await task.value
+    }
 
-        // 真实余额（一卡通 / 钱包）只在这里和首页各拉一次；
-        // 漏了这一页，先进账单页会一直按「估算」渲染
-        await BillService.refreshBalances()
-        bills = await BillService.loadHistory()
-        loaded = true
+    func cancelRequests() {
+        billsTask?.cancel()
+        profileTask?.cancel()
+        useCodeTask?.cancel()
     }
 }
