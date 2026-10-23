@@ -9,11 +9,27 @@ enum BillService {
     /// 月初打开 App 会看到空列表（像是「没消费过」），而消费趋势里 7 天视图也会缺数据。
     /// Android 那边同样拉 3 个月（`for (i in 0..2)`）。
     static func loadHistory() async -> [BillDTO] {
-        (try? await loadHistoryChecked()) ?? []
+        // 结算兜底保留已成功取得的月份，不因其它月份失败丢弃有效订单。
+        var all: [BillDTO] = []
+        for month in recentMonths() {
+            guard !Task.isCancelled else { break }
+            if let list = try? await loadMonth(month) { all.append(contentsOf: list) }
+        }
+        return all
     }
 
     /// 页面缓存只能接受完整的成功结果，不能把失败或取消当作空账单。
     static func loadHistoryChecked() async throws -> [BillDTO] {
+        var all: [BillDTO] = []
+        for month in recentMonths() {
+            try Task.checkCancellation()
+            all.append(contentsOf: try await loadMonth(month))
+        }
+        AppLog.shared.i("账单：拉取 \(all.count) 条（最近 3 个月）")
+        return all
+    }
+
+    private static func recentMonths() -> [String] {
         let fmt = DateFormatter()
         fmt.locale = Locale(identifier: "en_US_POSIX")
         fmt.dateFormat = "yyyy-MM"
@@ -21,16 +37,11 @@ enum BillService {
         var cal = Calendar(identifier: .gregorian)
         cal.locale = Locale(identifier: "en_US_POSIX")
 
-        var all: [BillDTO] = []
-        for i in 0 ..< 3 {
-            try Task.checkCancellation()
-            let date = cal.date(byAdding: .month, value: -i, to: Date()) ?? Date()
-            let month = fmt.string(from: date)
-            let list = try await loadMonth(month)
-            all.append(contentsOf: list)
+        let now = Date()
+        return (0 ..< 3).map { i in
+            let date = cal.date(byAdding: .month, value: -i, to: now) ?? now
+            return fmt.string(from: date)
         }
-        AppLog.shared.i("账单：拉取 \(all.count) 条（最近 3 个月）")
-        return all
     }
 
     /// 单月账单。`billRequestType=2` 是 Android 用的固定值。
@@ -94,11 +105,15 @@ enum BillService {
 
     /// 把两个余额来源刷进 Prefs（界面读 Prefs，所以刷完要手动触发刷新）
     static func refreshBalances() async {
+        guard !Task.isCancelled else { return }
         if let c = await loadCampusInfo() {
+            guard !Task.isCancelled else { return }
             Prefs.campusBalance = c.amount ?? ""
             AppLog.shared.i("一卡通余额：\(c.amount ?? "空")")
         }
+        guard !Task.isCancelled else { return }
         if let w = await loadWallet() {
+            guard !Task.isCancelled else { return }
             // accountRealMoney 是数字、money 是字符串，统一走 AnyNumber 后取 Double
             let v = w.realYuan ?? w.moneyYuan
             Prefs.walletBalance = v.map { String($0) } ?? ""

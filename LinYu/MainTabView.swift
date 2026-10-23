@@ -111,7 +111,7 @@ struct MainTabView: View {
         .task { await store.loadProfileIfNeeded() }
         .task { await store.loadUseCode() }
         .onDisappear { store.cancelRequests() }
-        .onChange(of: flow.lastConsumeYuan) { _ in Task { await store.reload() } }
+        .onChange(of: flow.settlementRevision) { _ in Task { await store.reload() } }
         .onChange(of: flow.activeOrder?.startedAt) { _ in
             showerMinimized = false
             settingsVisible = false

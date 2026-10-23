@@ -36,6 +36,17 @@ struct DataStoreRegression {
         let emptyStore = AppDataStore()
         await emptyStore.loadIfNeeded()
         check(emptyStore.loaded && emptyStore.bills.isEmpty, "successful empty response remains a valid empty state")
+        ApiClient.emptyBills = false
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM"
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        ApiClient.failingMonth = formatter.string(from: Calendar(identifier: .gregorian).date(byAdding: .month, value: -1, to: Date())!)
+        let partial = await BillService.loadHistory()
+        check(partial.count == 2, "settlement fallback preserves successful months on partial failure")
+        let partialStore = AppDataStore()
+        await partialStore.loadIfNeeded()
+        check(!partialStore.loaded, "partial bill responses do not become a complete cache")
+        ApiClient.failingMonth = nil
         if !failures.isEmpty { fatalError("Regression failures: \(failures.joined(separator: ", "))") }
     }
 }

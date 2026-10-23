@@ -13,6 +13,7 @@ final class AppLog {
 enum ApiClient {
     static var failBills = false
     static var emptyBills = false
+    static var failingMonth: String?
     static var delay: UInt64 = 0
     static var activeRequests = 0
     static func get(_ path: String, query: [String: String] = [:], tag: String? = nil) async throws -> Data {
@@ -23,6 +24,7 @@ enum ApiClient {
         if path.contains("bill/list") {
             if failBills { throw URLError(.notConnectedToInternet) }
             let month = query["month"] ?? ""
+            if month == failingMonth { throw URLError(.notConnectedToInternet) }
             let data: String = emptyBills ? "[]" : "[{\"consumeBillDTO\":{\"orderId\":\"\(month)\",\"consumeMoney\":\"2.00\"}}]"
             return Data("{\"success\":true,\"data\":\(data)}".utf8)
         }

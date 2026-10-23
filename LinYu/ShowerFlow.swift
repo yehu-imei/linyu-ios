@@ -70,6 +70,7 @@ final class ShowerFlow: ObservableObject {
     @Published var toast: String?
     @Published private(set) var isStopping = false
     @Published private(set) var lastConsumeYuan: Double?
+    @Published private(set) var settlementRevision = 0
     /// 自动关停弹窗
     @Published var autoClose: AutoCloseNotice?
 
@@ -519,6 +520,7 @@ final class ShowerFlow: ObservableObject {
             elapsed: autoClosed ? lastAutoCloseElapsed : lastClosedElapsed,
             amount: yuan, automatic: autoClosed)
         lastConsumeYuan = yuan
+        settlementRevision += 1
         if let yuan, yuan > 0 { Prefs.lastConsumeYuan = yuan }
 
         if autoClosed {

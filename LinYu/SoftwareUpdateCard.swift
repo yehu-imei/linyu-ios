@@ -8,9 +8,20 @@ private final class SoftwareReleaseStore: ObservableObject {
     @Published private(set) var checking = false
     @Published private(set) var checked = false
     @Published private(set) var failed = false
+    private var checkTask: Task<Void, Never>?
 
     func check(force: Bool = false) async {
-        guard !checking, force || !checked else { return }
+        if let checkTask { await checkTask.value; return }
+        guard force || !checked else { return }
+        let task = Task { @MainActor in
+            defer { self.checkTask = nil }
+            await self.fetch()
+        }
+        checkTask = task
+        await task.value
+    }
+
+    private func fetch() async {
         checking = true
         failed = false
         defer { checking = false }

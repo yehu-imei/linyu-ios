@@ -135,6 +135,7 @@ struct MainScreenView: View {
             scanner.activeSession = flow.ble
             // ⚠️ 首次进页面才拉账单；之后切回来直接复用容器里的缓存
             await store.loadIfNeeded()
+            guard !Task.isCancelled else { return }
             // ⚠️ 只在**还没有扫到设备**时才启动扫描。
             // 之前每次切回首页都重新 start()，而 start() 会清空列表，
             // 于是设备先闪回广播名（KLCXKJ-Water）再变回房间名。
