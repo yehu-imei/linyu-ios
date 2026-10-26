@@ -122,7 +122,7 @@ struct UseCodeRedeemView: View {
             expires = Date().addingTimeInterval(180)
         } catch is CancellationError { return }
         catch ApiError.business(_, let message) { errorText = unavailable ? nil : message }
-        catch { errorText = "换码失败，请重试" }
+        catch { errorText = unavailable ? nil : "换码失败，请重试" }
     }
 
     private func redeem() async {
