@@ -103,7 +103,8 @@ struct UseCodeRedeemView: View {
         else { eligibilityLoaded = await store.loadUseCode() }
         checking = false
         guard eligibilityLoaded, !unavailable, !Task.isCancelled else { return }
-        // Android 由用户点击“获取/换一个”才生成候选，打开弹窗不消耗额度。
+        // 对照 Android LaunchedEffect(Unit)：允许领取时自动获取首个候选。
+        await generate()
     }
 
     private func generate() async {
