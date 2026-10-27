@@ -456,7 +456,7 @@ final class ShowerFlow: ObservableObject {
             ble.disconnect()
             guard workScope.isCurrent else { return }
             guard settled.completed else {
-                errorMessage = "设备有未结算记录，自动补结算失败，请稍后重试"
+                errorMessage = "设备有未结算记录，自动补结算失败或设备记录未能清除（服务端已记账，设备仍停在 state=\(st.state)），请靠近设备后重试"
                 return
             }
             if !allowNewOrder {
@@ -851,27 +851,82 @@ final class ShowerFlow: ObservableObject {
                 if code == 170 {
                     AppLog.shared.e("结算上传被拒（170）：签名与上传字段不一致，请带日志反馈")
                 }
+                // data 为空但外壳成功：多半是字段解码整体失败，把原文打出来
+                if resp.success {
+                    AppLog.shared.w("结算上传成功但 data 解析为空，原始响应："
+                                    + String((String(data: data, encoding: .utf8) ?? "").prefix(500)))
+                }
                 AppLog.shared.w("结算上传失败（errorCode=\(code)）：\(resp.displayMessage ?? "")")
                 return (false, nil)
             }
 
             let yuan = body.upMoneyYuan
+            // 容错解码留下的问题字段：正常应为空，非空说明服务端某字段类型不符合预期
+            if !body.decodeIssues.isEmpty {
+                AppLog.shared.w("结算上传响应有字段解码异常（已按 nil 处理，不影响 clData）："
+                                + body.decodeIssues.joined(separator: "；"))
+            }
             guard workScope.isCurrent else { return (false, nil) }
 
-            // ③ 写回设备（清掉离线记录）；写回失败不影响——服务端已经记账
-            if let clData = body.clData, !clData.isEmpty,
-               let plain = KlcxkjCrypto.decryptByAes(clData) {
-                let hexPart = plain.contains("-")
-                    ? String(plain.split(separator: "-", maxSplits: 1).last ?? "")
-                    : plain
-                if let bytes = BleFrame.fromHex(hexPart), !bytes.isEmpty {
-                    let ok = await ble.writeBack(bytes)
-                    AppLog.shared.i(ok ? "0x86 写回成功，设备记录已清" : "0x86 写回失败（服务端已记账）")
+            // ③ 写回设备（清掉离线记录）。
+            //
+            // 服务端记账成功 ≠ 设备记录已清。写回失败时设备会**一直停在 state=3/6**，
+            // 于是每次点开阀都会重新走一遍补结算、再提示"已结清…请重新点击"，
+            // 补结算看起来次次成功，热水却始终开不了。
+            // 因此这里必须回读状态确认设备真的回到空闲，才能对外报"已结清"。
+            var cleared = false
+
+            // ⚠️ 兜底：先从原始 JSON 里直接取 clData，再退到模型字段。
+            //
+            // 实测（2026-10-27，projectId=859，设备 C47F0E6B1704）：同一个响应里
+            // `orderNo` / `consumeMoney` / `consumeDate` 都能解出来，唯独 `clData`
+            // 恒为 nil，且 `decodeIssues` 为空——模型解码这条路不可靠。
+            // 而 `clData` 是清除设备离线记录的**唯一**数据源，拿不到就等于永远开不了阀，
+            // 所以这里直接从原始 JSON 兜一层，不把成败押在 `Decodable` 上。
+            var effectiveClData = body.clData
+            if effectiveClData?.isEmpty != false {
+                if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   let d = obj["data"] as? [String: Any],
+                   let raw = d["clData"] as? String, !raw.isEmpty {
+                    effectiveClData = raw
+                    AppLog.shared.w("结算：模型字段 clData 为空，已从原始 JSON 兜底取到（\(raw.count) 字符）")
                 }
             }
+
+            if let rawCl = effectiveClData, !rawCl.isEmpty {
+                let plain = KlcxkjCrypto.decryptByAes(rawCl)
+                if let plain {
+                    let hexPart = plain.contains("-")
+                        ? String(plain.split(separator: "-", maxSplits: 1).last ?? "")
+                        : plain
+                    if let bytes = BleFrame.fromHex(hexPart), !bytes.isEmpty {
+                        let ok = await ble.writeBack(bytes)
+                        AppLog.shared.i(ok ? "0x86 写回成功（\(bytes.count)B），设备记录已清"
+                                        : "0x86 写回失败（服务端已记账），\(bytes.count)B")
+                        cleared = ok
+                    } else {
+                        AppLog.shared.w("结算：clData 解密后不是有效 hex（明文=\(plain)），跳过写回")
+                    }
+                } else {
+                    AppLog.shared.w("结算：clData 解密失败（原始密文长度=\(rawCl.count)）。"
+                                    + "明文为空说明 AES 参数不对或 base64 解析中断")
+                }
+            } else {
+                AppLog.shared.w("结算：服务端未返回 clData，设备记录无法清除"
+                                + "（orderNo=\(body.orderNo ?? "-")，原始响应："
+                                + String((String(data: data, encoding: .utf8) ?? "").prefix(500)) + "）")
+            }
+
+            // ④ 回读设备状态：state 回到 0 才算真正清干净
+            if let st = await ble.query() {
+                AppLog.shared.i("结算后回读：state=\(st.state)")
+                if st.isIdle { cleared = true }
+            }
+
             AppLog.shared.i("结算上传成功：设备=\(deviceName) orderNo=\(orderNo) upMoney=\(body.upMoney?.value ?? body.consumeMoney?.value ?? -1)")
             _ = consumeDate
-            return (true, yuan)
+            // cleared=false 时上层要按"未清干净"处理，不能再提示用户重新点击
+            return (cleared, yuan)
         } catch {
             AppLog.shared.w("上传结算失败：\(error.localizedDescription)")
             return (false, nil)
