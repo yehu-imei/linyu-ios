@@ -64,6 +64,18 @@ import Foundation
         check(WidgetDisplayPolicy.lastConsume(cached: 0, device: device, bills: [right]) == 0, "明确不同序列号时不按相同名字猜测")
         right.deviceSN = "water"; right.name = "旧设备名"
         check(WidgetDisplayPolicy.lastConsume(cached: 0, device: device, bills: [right]) == 0.5, "序列号精确匹配允许名称改变")
+        var aliased = device
+        aliased.aliases = ["confirmed-address"]
+        right.deviceSN = "confirmed-address"
+        check(WidgetDisplayPolicy.lastConsume(cached: 0, device: aliased, bills: [right]) == 0.5, "台账确认的地址与序列号共享消费记录")
+        right.deviceSN = "unknown-address"
+        check(WidgetDisplayPolicy.lastConsume(cached: 0, device: aliased, bills: [right]) == 0, "未知地址不能串用消费记录")
+        var aliasSnapshot = WidgetSnapshot()
+        aliasSnapshot.devices = [aliased]
+        check(aliasSnapshot.selected("confirmed-address")?.id == "water", "旧选中地址迁移到台账序列号")
+        check(aliasSnapshot.selected("unknown-address") == nil, "未知选中地址不能操作设备")
+        aliasSnapshot.devices[0].selectable = false
+        check(aliasSnapshot.selected("confirmed-address") == nil, "地址迁移不能绕过寝室筛选")
         let oldBill = Data(#"{"name":"320房","emoji":"🚿","time":"2026-11-03","money":"-¥1.84"}"#.utf8)
         check(try JSONDecoder().decode(WidgetBill.self, from: oldBill).id == nil, "升级兼容旧版组件账单缓存")
         let group = "group.com.hualala.linyu"

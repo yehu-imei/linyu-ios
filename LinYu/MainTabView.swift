@@ -257,7 +257,13 @@ struct MainTabView: View {
     }
 
     @MainActor private func processWidgetCommand() async {
-        guard scenePhase == .active else { return }
+        guard scenePhase == .active, let request = widgets.command, !flow.controlBusy else { return }
+        // 先让操作目标与进度可见，再查台账/开关阀，不能等网络结束才退出设置或背景页。
+        settingsVisible = false
+        userPresentation.page = nil
+        userPresentation.dialog = nil
+        showerMinimized = request.kind != .stop
+        tab = request.kind == .bills || request.kind == .billDetail ? 1 : 0
         flow.peripheralProvider = { [scanner] sn in scanner.peripheral(forSn: sn) }
         flow.centralProvider = { [scanner] in scanner.manager }
         flow.deviceInfoProvider = { [store] sn in store.deviceInfos[sn] }
@@ -334,6 +340,10 @@ struct MainTabView: View {
     @ViewBuilder
     private var flowDialogs: some View {
         ZStack {
+            if let message = widgets.operationMessage, !flow.isStarting,
+               flow.errorMessage == nil, flow.bleConfirmDevice == nil {
+                OpeningDialogView(progress: message, title: "正在处理")
+            }
             if flow.isStarting {
                 OpeningDialogView(progress: flow.openingText)
             }

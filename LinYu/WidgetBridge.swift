@@ -9,6 +9,7 @@ import WidgetKit
     @Published private(set) var command: WidgetCommand?
     @Published var pendingDeviceSN: String?
     @Published var pendingBillID: String?
+    @Published private(set) var operationMessage: String?
     private var acceptedSnapshot: WidgetSnapshot?
     private var handling = false
     private var lastReload = Date.distantPast
@@ -17,6 +18,7 @@ import WidgetKit
 
     func receive(_ url: URL) {
         guard let request = WidgetCommand(url: url) else { return }
+        AppLog.shared.i("收到组件入口：\(request.kind.rawValue)，目标 \(request.sn)")
         guard command == nil, !handling else { return }
         // 在接到点击时保留身份；回前台刷新台账不能把已受理动作变成“旧按钮”。
         acceptedSnapshot = WidgetSharedStore.read()
@@ -27,6 +29,7 @@ import WidgetKit
         acceptedSnapshot = nil
         pendingDeviceSN = nil
         pendingBillID = nil
+        operationMessage = nil
         consumed.removeAll()
         lastSnapshot = nil
         WidgetSharedStore.write(WidgetSnapshot())
@@ -47,11 +50,17 @@ import WidgetKit
             time: $0.consumeDate ?? "", money: $0.yuan.map { "-" + MoneyFormat.withSymbol($0) } ?? "—",
             id: $0.id, deviceSN: $0.deviceSnCode, detail: $0.deviceTypeLabel, amount: $0.yuan) }
         var infos: [String: WidgetDevice] = [:]
-        for (sn, info) in store.deviceInfos {
-            infos[sn] = WidgetDevice(id: sn, name: info.displayName, detail: info.typeLabel, emoji: info.typeEmoji,
-                                    selectable: DeviceInfo.inSameRoom(boundKey: Prefs.boundRoom, deviceName: info.deviceName ?? ""))
+        for (address, info) in store.deviceInfos.sorted(by: { $0.key < $1.key }) {
+            let sn = info.snCode.flatMap { $0.isEmpty ? nil : $0 } ?? address
+            var item = infos[sn] ?? WidgetDevice(id: sn, name: info.displayName, detail: info.typeLabel, emoji: info.typeEmoji,
+                selectable: DeviceInfo.inSameRoom(boundKey: Prefs.boundRoom, deviceName: info.deviceName ?? ""))
+            item.aliases = Array(Set((item.aliases ?? []) + [address, sn])).sorted()
+            infos[sn] = item
         }
-        if !Prefs.lastDeviceSnCode.isEmpty, infos[Prefs.lastDeviceSnCode] == nil {
+        if let canonical = infos.values.first(where: { $0.id == next.lastDevice || ($0.aliases ?? []).contains(next.lastDevice) }) {
+            next.lastDevice = canonical.id
+        }
+        if !next.lastDevice.isEmpty, infos[next.lastDevice] == nil {
             infos[Prefs.lastDeviceSnCode] = WidgetDevice(id: Prefs.lastDeviceSnCode, name: Prefs.lastDeviceName,
                 detail: Prefs.lastDeviceTypeName, emoji: Prefs.lastDeviceEmoji,
                 selectable: DeviceInfo.inSameRoom(boundKey: Prefs.boundRoom, deviceName: Prefs.lastDeviceRawName))
@@ -60,7 +69,9 @@ import WidgetKit
             infos[order.snCode] = WidgetDevice(id: order.snCode, name: order.deviceName, detail: "使用中的设备", emoji: order.deviceEmoji)
         }
         for item in scanner.devices.sorted(by: { $0.rssi > $1.rssi }) {
-            guard let sn = item.parsedSnCode, infos[sn] != nil else { continue }
+            guard let address = item.parsedSnCode else { continue }
+            let sn = store.deviceInfos[address]?.snCode.flatMap { $0.isEmpty ? nil : $0 } ?? address
+            guard infos[sn] != nil else { continue }
             infos[sn]?.rssi = item.rssi
             if !next.nearbyIDs.contains(sn) { next.nearbyIDs.append(sn) }
         }
@@ -71,7 +82,9 @@ import WidgetKit
         for sn in Array(infos.keys) {
             infos[sn]?.occupied = flow.deviceOwner[sn] == false
             if let item = infos[sn] {
-                infos[sn]?.lastConsume = WidgetDisplayPolicy.lastConsume(cached: Prefs.lastConsumeFor(sn), device: item, bills: billSnapshots)
+                let cached = Prefs.lastConsumeFor(sn)
+                let legacy = (item.aliases ?? []).map { Prefs.lastConsumeFor($0) }.first { $0 > 0 } ?? 0
+                infos[sn]?.lastConsume = WidgetDisplayPolicy.lastConsume(cached: cached > 0 ? cached : legacy, device: item, bills: billSnapshots)
             }
             if let order = orders.first(where: { $0.snCode == sn }) {
                 infos[sn]?.running = true
@@ -125,8 +138,12 @@ import WidgetKit
         guard !consumed.contains(actionID) else { return .home }
         consumed.insert(actionID)
         handling = true
+        operationMessage = request.kind == .stop ? "正在关闭设备…" : request.kind == .start ? "正在获取设备信息…" : "正在刷新…"
+        AppLog.shared.i("组件操作开始：\(request.kind.rawValue)，目标 \(request.sn)")
         defer {
             handling = false
+            operationMessage = nil
+            AppLog.shared.i("组件操作结束：\(request.kind.rawValue)，当前设备 \(flow.activeOrder?.snCode ?? "无")")
             if SessionWork.isCurrent(generation) {
                 var updated = WidgetSharedStore.read()
                 updated.token = UUID().uuidString
@@ -155,6 +172,7 @@ import WidgetKit
             }
             let needsBLE = info.needsBluetoothControl || Prefs.isBleDevice(request.sn)
             if needsBLE, scanner.peripheral(forSn: request.sn) == nil {
+                operationMessage = "正在搜索设备…"
                 scanner.start()
                 for _ in 0..<30 {
                     guard SessionWork.isCurrent(generation) else { return nil }
@@ -167,7 +185,9 @@ import WidgetKit
             if request.kind == .stop {
                 let target = DeviceNotificationTarget(accountKey: request.owner, snCode: request.sn,
                                                       orderNo: request.orderNo, startedAt: request.startedAt)
-                _ = await flow.handleNotification(DeviceNotificationAction(target: target, stop: true))
+                if !(await flow.handleNotification(DeviceNotificationAction(target: target, stop: true))) {
+                    flow.toast = "设备正在处理，请稍后重试"
+                }
             } else {
                 await flow.open(device: info, peripheral: scanner.peripheral(forSn: request.sn), central: scanner.manager)
             }

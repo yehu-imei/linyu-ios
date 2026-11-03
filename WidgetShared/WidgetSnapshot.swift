@@ -13,6 +13,8 @@ struct WidgetDevice: Codable, Equatable, Identifiable {
     var preDeduct: Double = 0
     var lastConsume: Double = 0
     var selectable = true
+    /// 只收录台账已确认属于此 SN 的地址，不能用猜测地址合并设备。
+    var aliases: [String]? = nil
 }
 
 struct WidgetBill: Codable, Equatable {
@@ -44,7 +46,7 @@ struct WidgetSnapshot: Codable, Equatable {
 
     func selected(_ id: String) -> WidgetDevice? {
         let chosen = id.isEmpty ? lastDevice : id
-        return devices.first { $0.id == chosen && ($0.selectable || $0.running) }
+        return devices.first { ($0.id == chosen || $0.aliases?.contains(chosen) == true) && ($0.selectable || $0.running) }
     }
     /// 状态转换时使旧按钮失效；金额和信号刷新不作废按钮。
     var controlIdentity: String {
@@ -60,7 +62,7 @@ enum WidgetDisplayPolicy {
         if cached > 0 { return cached }
         return bills.first(where: {
             guard ($0.amount ?? 0) > 0 else { return false }
-            if let sn = $0.deviceSN, !sn.isEmpty { return sn == device.id }
+            if let sn = $0.deviceSN, !sn.isEmpty { return sn == device.id || device.aliases?.contains(sn) == true }
             return !device.name.isEmpty && $0.name == device.name && $0.detail == device.detail
         })?.amount ?? 0
     }
@@ -167,9 +169,9 @@ enum WidgetSharedStore {
         catch { return false }
     }
     struct Selection: Codable { var owner = ""; var device = ""; var tab = 0 }
-    static func selection(_ slot: String) -> Selection {
+    static func selection(_ slot: String, owner: String? = nil) -> Selection {
         guard let url = selectionURL(slot), let data = try? Data(contentsOf: url),
-              let value = try? JSONDecoder().decode(Selection.self, from: data), value.owner == read().owner else { return Selection() }
+              let value = try? JSONDecoder().decode(Selection.self, from: data), value.owner == (owner ?? read().owner) else { return Selection() }
         return value
     }
     static func select(_ value: Selection, slot: String) {

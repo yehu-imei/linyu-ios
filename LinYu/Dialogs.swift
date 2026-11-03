@@ -42,6 +42,9 @@ struct AlertCard<Content: View, Actions: View>: View {
     /// 标题下面那行小字（如位置）
     var subtitle: String? = nil
     var cornerRadius: CGFloat = 28
+    var contentSpacing: CGFloat = 16
+    var actionSpacing: CGFloat = 20
+    var cardPadding: CGFloat = 24
     @ViewBuilder let content: Content
     @ViewBuilder let actions: Actions
 
@@ -68,15 +71,15 @@ struct AlertCard<Content: View, Actions: View>: View {
             .frame(maxWidth: .infinity, alignment: titleAlign == .center ? .center : .leading)
 
             content
-                .padding(.top, 16)
+                .padding(.top, contentSpacing)
 
             HStack(spacing: 4) {
                 Spacer(minLength: 0)
                 actions
             }
-            .padding(.top, 20)
+            .padding(.top, actionSpacing)
         }
-        .padding(24)
+        .padding(cardPadding)
         .frame(maxWidth: 340)
         .background(colors.solidSurface)
         .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
@@ -220,10 +223,11 @@ struct OpeningDialogView: View {
     @Environment(\.appColors) private var colors
     /// 具体进度文案。蓝牙表那条要好几步，不给进度用户会以为卡死
     let progress: String
+    var title: String = "正在开启热水器..."
 
     var body: some View {
         DialogScrim(onTapOutside: nil) {
-            AlertCard(title: "正在开启热水器...", titleAlign: .center) {
+            AlertCard(title: title, titleAlign: .center) {
                 HStack(spacing: 12) {
                     ProgressView()
                         .tint(colors.accent)
@@ -446,16 +450,21 @@ struct ConfirmDialogView: View {
     /// 取消键文案。传 nil 表示**不显示取消键**
     /// （对照 Android：只有能退出时才给 dismissButton「取消」）
     var cancelTitle: String? = "取消"
+    var compact: Bool = false
     let onConfirm: () -> Void
     let onDismiss: () -> Void
 
     var body: some View {
         DialogScrim(onTapOutside: onDismiss) {
-            AlertCard(title: title, titleAlign: .center) {
+            AlertCard(title: title, titleAlign: compact ? .leading : .center,
+                      cornerRadius: compact ? 24 : 28,
+                      contentSpacing: compact ? 10 : 16,
+                      actionSpacing: compact ? 10 : 20,
+                      cardPadding: compact ? 20 : 24) {
                 Text(message)
                     .font(.system(size: 14))
                     .foregroundStyle(colors.textSecondary)
-                    .frame(maxWidth: .infinity, alignment: .center)
+                    .frame(maxWidth: .infinity, alignment: compact ? .leading : .center)
             } actions: {
                 if let cancelTitle {
                     DialogTextButton(title: cancelTitle, color: colors.accent, action: onDismiss)

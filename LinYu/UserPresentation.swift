@@ -36,6 +36,7 @@ struct UserDialogs: View {
                 confirmTitle: canLogout ? "退出" : "返回",
                 destructive: canLogout,
                 cancelTitle: canLogout ? "取消" : nil,
+                compact: true,
                 onConfirm: {
                     if canLogout {
                         presentation.dialog = nil

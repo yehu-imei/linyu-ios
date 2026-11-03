@@ -285,7 +285,10 @@ struct MainScreenView: View {
                 if isCurrent {
                     onResumeOrder()
                 } else {
-                    Task { await flow.resume(record: record) }
+                    Task {
+                        await flow.resume(record: record)
+                        if flow.activeOrder?.snCode == record.snCode { onResumeOrder() }
+                    }
                 }
             }
             .buttonStyle(AccentButtonStyle(colors: colors))
@@ -521,7 +524,10 @@ struct MainScreenView: View {
             if flow.activeOrder?.snCode == sn {
                 onResumeOrder()
             } else {
-                Task { await flow.resume(record: record) }
+                Task {
+                    await flow.resume(record: record)
+                    if flow.activeOrder?.snCode == record.snCode { onResumeOrder() }
+                }
             }
             return
         }
@@ -536,6 +542,7 @@ struct MainScreenView: View {
         }
         Task {
             await flow.open(device: device, peripheral: peripheral, central: central)
+            if flow.activeOrder?.snCode == sn { onResumeOrder() }
         }
     }
 
@@ -577,6 +584,7 @@ struct MainScreenView: View {
             // 云端通道，不需要连接对象
             await flow.open(device: info, peripheral: nil, central: nil)
         }
+        if flow.activeOrder?.snCode == (info.snCode ?? sn) { onResumeOrder() }
     }
 
     /// 扫码绑定：扫到 snCode 后查台账并直接打开详情

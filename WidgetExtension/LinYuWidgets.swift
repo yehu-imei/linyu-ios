@@ -1,6 +1,10 @@
 import SwiftUI
 import WidgetKit
 import AppIntents
+import os
+#if !LINYU_WIDGET_EXTENSION
+import UIKit
+#endif
 
 enum WidgetSlot: String, AppEnum {
     case one = "1", two = "2", three = "3", four = "4"
@@ -20,11 +24,28 @@ struct WidgetPageIntent: AppIntent {
     init() {}
     init(slot: String, page: Int) { self.slot = slot; self.page = page }
     func perform() async throws -> some IntentResult {
-        var value = WidgetSharedStore.selection(slot)
-        value.owner = WidgetSharedStore.read().owner
+        let started = Date()
+        let snapshot = WidgetSharedStore.read()
+        var value = WidgetSharedStore.selection(slot, owner: snapshot.owner)
+        value.owner = snapshot.owner
         value.tab = min(2, max(0, page))
         WidgetSharedStore.select(value, slot: slot)
+        Logger(subsystem: "com.hualala.linyu", category: "Widget").info("切页缓存写入耗时 \(Date().timeIntervalSince(started) * 1000) ms，页面 \(page)")
         // Button(intent:) 完成后系统会刷新当前组件，无需额外重载所有组件。
+        return .result()
+    }
+}
+struct WidgetPickIntent: AppIntent {
+    static var title: LocalizedStringResource = "选用设备"
+    @Parameter(title: "设置") var slot: String
+    @Parameter(title: "设备") var sn: String
+    @Parameter(title: "身份") var token: String
+    init() {}
+    init(slot: String, sn: String, token: String) { self.slot = slot; self.sn = sn; self.token = token }
+    func perform() async throws -> some IntentResult {
+        let snapshot = WidgetSharedStore.read()
+        guard snapshot.token == token, !snapshot.owner.isEmpty, let device = snapshot.selected(sn) else { return .result() }
+        WidgetSharedStore.select(.init(owner: snapshot.owner, device: device.id, tab: 0), slot: slot)
         return .result()
     }
 }
@@ -36,9 +57,12 @@ struct WidgetOpenIntent: AppIntent {
     init(_ url: URL) { destination = url.absoluteString }
     @MainActor
     func perform() async throws -> some IntentResult {
-        // openAppWhenRun 在主应用执行；App 和扩展都编译此类型，交给既有控制链。
+        // 前台 intent 只负责路由，不直接投递水控。由打开 URL 的可见场景接手。
         #if !LINYU_WIDGET_EXTENSION
-        if let url = URL(string: destination) { WidgetBridge.shared.receive(url) }
+        if let url = URL(string: destination), WidgetCommand(url: url) != nil {
+            let opened = await UIApplication.shared.open(url)
+            AppLog.shared.i("组件唤起操作页面：\(opened ? "成功" : "失败")")
+        }
         #endif
         return .result()
     }
@@ -64,7 +88,11 @@ struct LinYuWidgetProvider: AppIntentTimelineProvider {
         return Timeline(entries: entries, policy: .after(Date().addingTimeInterval(900)))
     }
     private func entry(_ slot: String) -> LinYuWidgetEntry {
-        .init(date: Date(), snapshot: WidgetSharedStore.read(), slot: slot, selection: WidgetSharedStore.selection(slot))
+        let started = Date()
+        let snapshot = WidgetSharedStore.read()
+        let selection = WidgetSharedStore.selection(slot, owner: snapshot.owner)
+        Logger(subsystem: "com.hualala.linyu", category: "Widget").info("时间线缓存读取耗时 \(Date().timeIntervalSince(started) * 1000) ms，页面 \(selection.tab)")
+        return .init(date: Date(), snapshot: snapshot, slot: slot, selection: selection)
     }
 }
 
@@ -140,7 +168,7 @@ struct LinYuWidgetView: View {
         .buttonStyle(.plain)
         .containerBackground(for: .widget) {
             Color(red: 15/255, green: 23/255, blue: 32/255)
-                .opacity(0.42)
+                // iOS 会把透明背景合成到系统材质上，浅色下发白；固定底色保持白字对比度。
                 .overlay(LinearGradient(colors: [.white.opacity(0.13), .white.opacity(0.045)], startPoint: .topLeading, endPoint: .bottomTrailing))
                 .overlay(LinearGradient(stops: [.init(color: .white.opacity(0.20), location: 0), .init(color: .white.opacity(0.05), location: 0.45), .init(color: .clear, location: 1)], startPoint: .top, endPoint: .bottom))
                 .overlay(ContainerRelativeShape().strokeBorder(.white.opacity(0.18), lineWidth: 1))
@@ -173,13 +201,13 @@ struct LinYuWidgetView: View {
             else if let message = snapshot.message { Text(message).multilineTextAlignment(.center).lineLimit(3) }
             else if let device, device.running, device.startedAt > 0 {
                 Text(Date(timeIntervalSince1970: Double(device.startedAt) / 1000), style: .timer)
-                    .font(.system(size: 25, weight: .semibold, design: .rounded)).monospacedDigit()
+                    .font(.system(size: 24, weight: .medium)).monospacedDigit()
                     .multilineTextAlignment(.center).frame(maxWidth: .infinity, alignment: .center)
                 Text("预扣 · ¥\(device.preDeduct, specifier: "%.2f")").font(.system(size: 10))
             } else {
-                Text("上次消费").foregroundStyle(.white.opacity(0.65))
+                Text("上次消费").font(.system(size: 10.5)).foregroundStyle(.white.opacity(0.65))
                 Text((device?.lastConsume ?? 0) > 0 ? String(format: "¥ %.2f", device!.lastConsume) : "¥ —")
-                    .font(.system(size: 25, weight: .semibold, design: .rounded)).minimumScaleFactor(0.7).lineLimit(1)
+                    .font(.system(size: 22, weight: .medium)).minimumScaleFactor(0.7).lineLimit(1)
             }
           }.frame(maxWidth: .infinity, maxHeight: .infinity).padding(8).modifier(Glass())
         }.disabled(snapshot.busy && !staleBusy)
@@ -197,7 +225,7 @@ struct LinYuWidgetView: View {
             Text(device?.detail ?? "点此打开淋浴").font(.system(size: 10)).foregroundStyle(.white.opacity(0.65)).lineLimit(1)
                 .padding(.leading, 10)
             readout
-            power.frame(height: 33)
+            power.frame(height: 34)
         }
     }
     private var wide: some View {
@@ -242,8 +270,9 @@ struct LinYuWidgetView: View {
             let devices = snapshot.nearbyIDs.compactMap { sn in snapshot.devices.first { $0.id == sn && ($0.selectable || $0.running) } }
             if devices.isEmpty { Text("未扫描到附近设备").foregroundStyle(.white.opacity(0.6)); Spacer(minLength: 0) }
             ForEach(Array(devices.prefix(2))) { item in
-              Button(intent: WidgetOpenIntent(WidgetCommand.url(.device, snapshot: snapshot, device: item))) {
                 HStack(spacing: 6) {
+                  Button(intent: WidgetOpenIntent(WidgetCommand.url(.device, snapshot: snapshot, device: item))) {
+                   HStack(spacing: 6) {
                     Text(item.emoji).frame(width: 25, height: 25).background(.white.opacity(0.08), in: Circle()).overlay(Circle().strokeBorder(.white.opacity(0.12), lineWidth: 1))
                     VStack(alignment: .leading, spacing: 2) {
                         Text(item.name).font(.system(size: 11)).lineLimit(1).truncationMode(.head)
@@ -252,9 +281,12 @@ struct LinYuWidgetView: View {
                             if let rssi = item.rssi { Text("● \(rssi) dBm").foregroundStyle(rssi >= -70 ? .green : rssi >= -85 ? .orange : .red).fixedSize() }
                         }.font(.system(size: 8))
                     }.frame(maxWidth: .infinity, alignment: .leading)
+                   }
+                  }
+                  Button(intent: WidgetPickIntent(slot: entry.slot, sn: item.id, token: snapshot.token)) {
                     Text("选用").font(.system(size: 10)).padding(.horizontal, 9).padding(.vertical, 4).modifier(Glass(radius: 20))
+                  }
                 }.padding(7).frame(maxWidth: .infinity, maxHeight: .infinity).modifier(Glass())
-              }
             }
         }.frame(maxWidth: .infinity, alignment: .leading)
     }
