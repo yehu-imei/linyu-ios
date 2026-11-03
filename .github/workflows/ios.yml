@@ -126,8 +126,8 @@ jobs:
           codesign --force --sign - --timestamp=none --entitlements LinYu/LinYu.entitlements "$APP"
           codesign --verify --strict "$EXT"
           codesign --verify --strict "$APP"
-          codesign --display --entitlements - "$EXT" > build/widget-entitlements.plist
-          codesign --display --entitlements - "$APP" > build/app-entitlements.plist
+          codesign --display --entitlements - --xml "$EXT" > build/widget-entitlements.plist
+          codesign --display --entitlements - --xml "$APP" > build/app-entitlements.plist
           python3 - <<'PY'
           import plistlib
           expected = ["group.com.hualala.linyu"]
