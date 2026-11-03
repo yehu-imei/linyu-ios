@@ -26,11 +26,9 @@ struct WidgetPreviewScreen: View {
         VStack(spacing: 18) {
             Text("淋浴 · 小组件布局验收").font(.headline).foregroundStyle(.white)
             HStack(spacing: 16) {
-                preview("tile", width: 160, height: 170, family: .systemSmall)
                 preview("panel", width: 160, height: 170, family: .systemSmall)
             }
             preview("wide", width: 336, height: 170, family: .systemMedium)
-            preview("wide", width: 336, height: 285, family: .systemLarge)
         }.frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Color(red: 0.16, green: 0.20, blue: 0.24).ignoresSafeArea())
     }

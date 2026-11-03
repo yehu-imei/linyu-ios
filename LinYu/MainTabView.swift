@@ -116,6 +116,8 @@ struct MainTabView: View {
                     Spacer()
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                // Android 是屏幕顶端 60dp，不是安全区下面再加 60。
+                .ignoresSafeArea(.container, edges: .top)
                 // 这一层铺满全屏，但**不能拦点击**：它只是 Toast 的容器
                 .allowsHitTesting(false)
                 .animation(.easeInOut(duration: 0.18), value: toast)
@@ -262,9 +264,11 @@ struct MainTabView: View {
         guard let action = await widgets.process(store: store, flow: flow, scanner: scanner) else { return }
         settingsVisible = false
         userPresentation.page = nil
-        if action == .bills { showerMinimized = true; tab = 1; await store.reload() }
-        else if action == .nearby { showerMinimized = true; tab = 0; scanner.start() }
-        else { tab = 0; showerMinimized = flow.activeOrder == nil }
+        userPresentation.dialog = nil
+        if action == .bills || action == .billDetail { showerMinimized = true; tab = 1; await store.reload() }
+        else if action == .nearby || action == .device { showerMinimized = true; tab = 0; if !scanner.isScanning { scanner.start() } }
+        else if action == .start || action == .stop { tab = 0; showerMinimized = flow.activeOrder == nil }
+        else { tab = 0; showerMinimized = true }
         widgets.sync(store: store, flow: flow, scanner: scanner, force: true)
     }
 

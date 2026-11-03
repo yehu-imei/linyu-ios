@@ -4,6 +4,7 @@ import SwiftUI
 ///
 /// 自上而下：余额标题 → 余额卡 → 消费趋势 → 账单（**最近 20 次**）→ 账单详情弹窗。
 struct WalletScreenView: View {
+    @ObservedObject private var widgets = WidgetBridge.shared
     @EnvironmentObject private var session: Session
     @Environment(\.appColors) private var colors
 
@@ -105,6 +106,8 @@ struct WalletScreenView: View {
             }
         }
         .task { await load() }
+        .task { await openWidgetBill() }
+        .onChange(of: widgets.pendingBillID) { _ in Task { await openWidgetBill() } }
         .onAppear { trendEnabled = Prefs.trendEnabled }
         .overlay {
             if let b = detailBill {
@@ -128,6 +131,16 @@ struct WalletScreenView: View {
     }
 
     // MARK: - 余额卡
+
+    @MainActor private func openWidgetBill() async {
+        guard let id = widgets.pendingBillID else { return }
+        widgets.pendingBillID = nil
+        guard !id.isEmpty else { return }
+        if let bill = store.bills.first(where: { $0.id == id }) { detailBill = bill; return }
+        await store.reload()
+        if let bill = store.bills.first(where: { $0.id == id }) { detailBill = bill }
+        else { flow.toast = "未找到这笔账单，请刷新" }
+    }
 
     private var balanceCard: some View {
         VStack(alignment: .leading, spacing: 0) {

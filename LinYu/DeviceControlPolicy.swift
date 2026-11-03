@@ -41,6 +41,12 @@ struct DeviceNotificationTarget: Equatable {
         let expected = self.orderNo.isEmpty ? record.orderNo : self.orderNo
         return record.snCode == snCode && !expected.isEmpty && orderNo == expected && isOwner != false
     }
+
+    func isSameSession(as other: DeviceNotificationTarget) -> Bool {
+        !accountKey.isEmpty && accountKey == other.accountKey && snCode == other.snCode &&
+        startedAt > 0 && startedAt == other.startedAt &&
+        (orderNo.isEmpty || other.orderNo.isEmpty || orderNo == other.orderNo)
+    }
 }
 
 struct DeviceNotificationAction: Identifiable, Equatable {

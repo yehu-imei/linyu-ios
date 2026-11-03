@@ -20,6 +20,10 @@ struct WidgetBill: Codable, Equatable {
     var emoji: String
     var time: String
     var money: String
+    var id: String? = nil
+    var deviceSN: String? = nil
+    var detail: String? = nil
+    var amount: Double? = nil
 }
 
 struct WidgetSnapshot: Codable, Equatable {
@@ -51,6 +55,15 @@ struct WidgetSnapshot: Codable, Equatable {
 }
 
 enum WidgetDisplayPolicy {
+    // Android 按设备保存消费；没有本机记录时，只用明确匹配设备的账单补齐。
+    static func lastConsume(cached: Double, device: WidgetDevice, bills: [WidgetBill]) -> Double {
+        if cached > 0 { return cached }
+        return bills.first(where: {
+            guard ($0.amount ?? 0) > 0 else { return false }
+            if let sn = $0.deviceSN, !sn.isEmpty { return sn == device.id }
+            return !device.name.isEmpty && $0.name == device.name && $0.detail == device.detail
+        })?.amount ?? 0
+    }
     static func syncedAgo(_ date: Date, now: Date) -> String {
         let minutes = max(0, Int(now.timeIntervalSince(date) / 60))
         if minutes < 1 { return "刚刚" }
@@ -59,7 +72,7 @@ enum WidgetDisplayPolicy {
     }
 }
 
-enum WidgetCommandKind: String, Codable { case start, stop, refresh, home, bills, nearby }
+enum WidgetCommandKind: String, Codable { case start, stop, refresh, home, bills, nearby, device, billDetail, refreshNearby }
 struct WidgetCommand: Equatable, Identifiable {
     let id = UUID()
     let kind: WidgetCommandKind
@@ -68,8 +81,9 @@ struct WidgetCommand: Equatable, Identifiable {
     let orderNo: String
     let startedAt: Int64
     let token: String
+    let billID: String
 
-    static func url(_ kind: WidgetCommandKind, snapshot: WidgetSnapshot, device: WidgetDevice?) -> URL {
+    static func url(_ kind: WidgetCommandKind, snapshot: WidgetSnapshot, device: WidgetDevice?, billID: String = "") -> URL {
         var parts = URLComponents()
         parts.scheme = "linyu-widget"
         parts.host = kind.rawValue
@@ -78,6 +92,7 @@ struct WidgetCommand: Equatable, Identifiable {
                            URLQueryItem(name: "sn", value: device?.id ?? ""),
                            URLQueryItem(name: "order", value: device?.orderNo ?? ""),
                            URLQueryItem(name: "start", value: String(device?.startedAt ?? 0))]
+        if !billID.isEmpty { parts.queryItems?.append(URLQueryItem(name: "bill", value: billID)) }
         return parts.url!
     }
     init?(url: URL) {
@@ -85,10 +100,13 @@ struct WidgetCommand: Equatable, Identifiable {
               let parts = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return nil }
         let items = parts.queryItems ?? []
         func field(_ key: String) -> String { items.first { $0.name == key }?.value ?? "" }
-        guard items.count == 5, Set(items.map(\.name)).count == 5,
+        let keys = Set(items.map(\.name))
+        guard keys == Set(["owner", "token", "sn", "order", "start"]) || keys == Set(["owner", "token", "sn", "order", "start", "bill"]),
+              items.count == keys.count,
               let start = Int64(field("start")) else { return nil }
         self.kind = kind; owner = field("owner"); sn = field("sn")
         orderNo = field("order"); startedAt = start; token = field("token")
+        billID = field("bill")
     }
     func matches(_ snapshot: WidgetSnapshot) -> Bool {
         guard !owner.isEmpty, owner == snapshot.owner, token == snapshot.token else { return false }
@@ -121,10 +139,16 @@ enum WidgetSharedStore {
         return [.atomic]
         #endif
     }
+    private static var resolvedDirectory: URL?
     static var directory: URL? {
+        // 成功后复用地址，不在每次切页反复解析签名描述文件；失败不永久缓存。
+        if let resolvedDirectory { return resolvedDirectory }
         let profile = Bundle.main.url(forResource: "embedded", withExtension: "mobileprovision").flatMap { try? Data(contentsOf: $0) }
         for identifier in WidgetGroupPolicy.candidates(profile: profile, original: group) {
-            if let url = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: identifier) { return url }
+            if let url = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: identifier) {
+                resolvedDirectory = url
+                return url
+            }
         }
         return nil
     }

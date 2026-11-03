@@ -24,24 +24,22 @@ struct WidgetPageIntent: AppIntent {
         value.owner = WidgetSharedStore.read().owner
         value.tab = min(2, max(0, page))
         WidgetSharedStore.select(value, slot: slot)
-        WidgetCenter.shared.reloadAllTimelines()
+        // Button(intent:) 完成后系统会刷新当前组件，无需额外重载所有组件。
         return .result()
     }
 }
-struct WidgetPickIntent: AppIntent {
-    static var title: LocalizedStringResource = "选用设备"
-    @Parameter(title: "设置") var slot: String
-    @Parameter(title: "设备") var sn: String
-    @Parameter(title: "身份") var token: String
+struct WidgetOpenIntent: AppIntent {
+    static var title: LocalizedStringResource = "打开淋浴并执行操作"
+    static var openAppWhenRun: Bool = true
+    @Parameter(title: "目标") var destination: String
     init() {}
-    init(slot: String, sn: String, token: String) { self.slot = slot; self.sn = sn; self.token = token }
+    init(_ url: URL) { destination = url.absoluteString }
+    @MainActor
     func perform() async throws -> some IntentResult {
-        let snapshot = WidgetSharedStore.read()
-        guard snapshot.token == token, !snapshot.owner.isEmpty,
-              snapshot.devices.contains(where: { $0.id == sn && ($0.selectable || $0.running) }) else { return .result() }
-        // 选用只换目标，不申请费率；真正控制前主应用重新查询设备。
-        WidgetSharedStore.select(.init(owner: snapshot.owner, device: sn, tab: 0), slot: slot)
-        WidgetCenter.shared.reloadAllTimelines()
+        // openAppWhenRun 在主应用执行；App 和扩展都编译此类型，交给既有控制链。
+        #if !LINYU_WIDGET_EXTENSION
+        if let url = URL(string: destination) { WidgetBridge.shared.receive(url) }
+        #endif
         return .result()
     }
 }
@@ -71,9 +69,11 @@ struct LinYuWidgetProvider: AppIntentTimelineProvider {
 }
 
 private struct Glass: ViewModifier {
+    var radius: CGFloat = 15
+    var stopping = false
     func body(content: Content) -> some View {
-        content.background(.white.opacity(0.10), in: RoundedRectangle(cornerRadius: 15))
-            .overlay(RoundedRectangle(cornerRadius: 15).strokeBorder(.white.opacity(0.16), lineWidth: 1))
+        content.background(stopping ? Color(red: 239/255, green: 68/255, blue: 68/255).opacity(0.22) : .white.opacity(0.10), in: RoundedRectangle(cornerRadius: radius))
+            .overlay(RoundedRectangle(cornerRadius: radius).strokeBorder(.white.opacity(0.16), lineWidth: 1))
     }
 }
 /// 对照 Android res/drawable/ic_widget_*.xml 的 24×24 描边路径。
@@ -116,7 +116,7 @@ struct LinYuWidgetView: View {
     private var snapshot: WidgetSnapshot { entry.snapshot }
     private var device: WidgetDevice? { snapshot.selected(entry.selection.device) }
     private var staleBusy: Bool { snapshot.busy && entry.date.timeIntervalSince(snapshot.date) > 30 }
-    private var stateColor: Color { device?.running == true ? .cyan : device?.occupied == true ? .orange : .green }
+    private var stateColor: Color { device?.running == true ? Color(red: 0.376, green: 0.647, blue: 0.98) : device?.occupied == true ? .orange : Color(red: 0.29, green: 0.87, blue: 0.50) }
     private func url(_ kind: WidgetCommandKind) -> URL { WidgetCommand.url(kind, snapshot: snapshot, device: device) }
     private var action: WidgetCommandKind {
         if staleBusy { return .refresh }
@@ -131,157 +131,161 @@ struct LinYuWidgetView: View {
     }
     var body: some View {
         Group {
-            if layout == "tile" { tile }
-            else if layout == "panel" { panel }
+            if layout == "panel" { panel }
             else { wide }
         }
-        .padding(layout == "tile" ? 12 : 14)
+        .padding(layout == "panel" ? 12 : 0)
         .foregroundStyle(.white)
         .font(.system(size: 12))
         .buttonStyle(.plain)
         .containerBackground(for: .widget) {
             Color(red: 15/255, green: 23/255, blue: 32/255)
-                .overlay(LinearGradient(colors: [.white.opacity(0.20), .white.opacity(0.045)], startPoint: .topLeading, endPoint: .bottomTrailing))
+                .opacity(0.42)
+                .overlay(LinearGradient(colors: [.white.opacity(0.13), .white.opacity(0.045)], startPoint: .topLeading, endPoint: .bottomTrailing))
+                .overlay(LinearGradient(stops: [.init(color: .white.opacity(0.20), location: 0), .init(color: .white.opacity(0.05), location: 0.45), .init(color: .clear, location: 1)], startPoint: .top, endPoint: .bottom))
+                .overlay(ContainerRelativeShape().strokeBorder(.white.opacity(0.18), lineWidth: 1))
         }
-        .widgetURL(url(layout == "tile" && !(snapshot.busy && !staleBusy) ? action : .home))
+        .widgetURL(url(entry.selection.tab == 2 && layout == "wide" ? .bills : .home))
+        .transition(.identity)
+        .contentTransition(.identity)
+        .animation(nil, value: entry.selection.tab)
+        .transaction { $0.animation = nil; $0.disablesAnimations = true }
         .privacySensitive()
     }
-    private var tile: some View {
-        Link(destination: url(action)) {
-            VStack(spacing: 12) {
-                Text(staleBusy ? "状态未知" : snapshot.message ?? (snapshot.owner.isEmpty ? "未登录" : device == nil ? "未选设备" : device?.running == true ? "使用中" : device?.occupied == true ? "占用中" : "空闲"))
-                    .font(.system(size: 12)).lineLimit(2)
-                if snapshot.busy && !staleBusy { ProgressView().tint(.white) }
-                else if device?.occupied == true { Image(systemName: "lock.fill").font(.system(size: 42)) }
-                else { AndroidWidgetGlyph(kind: device?.running == true ? "stop" : "power").frame(width: 48, height: 48) }
-            }.frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background((device?.running == true ? Color.cyan : device?.occupied == true ? Color.orange : Color.white).opacity(0.18), in: RoundedRectangle(cornerRadius: 18))
-        }.disabled(snapshot.busy && !staleBusy)
-    }
     private var header: some View {
-        HStack(spacing: 5) {
-            Text(title).font(.system(size: 14, weight: .semibold)).lineLimit(1).truncationMode(.head)
+        HStack(spacing: 4) {
+            if device != nil { Circle().fill(stateColor).frame(width: 6, height: 6) }
+            Text(title).font(.system(size: 13, weight: .semibold)).lineLimit(1).minimumScaleFactor(0.7).truncationMode(.head)
             Spacer(minLength: 0)
             if device != nil {
                 Text(device?.running == true ? "● 使用中" : device?.occupied == true ? "● 占用中" : "● 空闲")
                     .font(.system(size: 10)).foregroundStyle(stateColor).fixedSize()
                     .padding(.horizontal, 5).padding(.vertical, 3)
                     .background(stateColor.opacity(0.14), in: Capsule())
+                    .overlay(Capsule().strokeBorder(.white.opacity(0.16), lineWidth: 1))
             }
         }
     }
     private var readout: some View {
-        VStack(spacing: 5) {
+        Button(intent: WidgetOpenIntent(url(device?.running == true ? .stop : .bills))) {
+          VStack(spacing: 5) {
             if staleBusy { Text("状态未知，请刷新").multilineTextAlignment(.center) }
             else if let message = snapshot.message { Text(message).multilineTextAlignment(.center).lineLimit(3) }
             else if let device, device.running, device.startedAt > 0 {
                 Text(Date(timeIntervalSince1970: Double(device.startedAt) / 1000), style: .timer)
                     .font(.system(size: 25, weight: .semibold, design: .rounded)).monospacedDigit()
+                    .multilineTextAlignment(.center).frame(maxWidth: .infinity, alignment: .center)
                 Text("预扣 · ¥\(device.preDeduct, specifier: "%.2f")").font(.system(size: 10))
             } else {
                 Text("上次消费").foregroundStyle(.white.opacity(0.65))
                 Text((device?.lastConsume ?? 0) > 0 ? String(format: "¥ %.2f", device!.lastConsume) : "¥ —")
                     .font(.system(size: 25, weight: .semibold, design: .rounded)).minimumScaleFactor(0.7).lineLimit(1)
             }
-        }.frame(maxWidth: .infinity, maxHeight: .infinity).padding(8).modifier(Glass())
+          }.frame(maxWidth: .infinity, maxHeight: .infinity).padding(8).modifier(Glass())
+        }.disabled(snapshot.busy && !staleBusy)
     }
     private var power: some View {
-        Link(destination: url(action)) {
+        Button(intent: WidgetOpenIntent(url(action))) {
             AndroidWidgetGlyph(kind: device?.running == true ? "stop" : "power").frame(width: 24, height: 24)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .modifier(Glass())
+                .modifier(Glass(radius: 12, stopping: device?.running == true))
         }.disabled(snapshot.busy && !staleBusy).accessibilityLabel(device?.running == true ? "结束用水" : "开始用水")
     }
     private var panel: some View {
-        VStack(spacing: 7) {
+        VStack(alignment: .leading, spacing: 5) {
             header
             Text(device?.detail ?? "点此打开淋浴").font(.system(size: 10)).foregroundStyle(.white.opacity(0.65)).lineLimit(1)
+                .padding(.leading, 10)
             readout
             power.frame(height: 33)
         }
     }
     private var wide: some View {
-        HStack(spacing: 12) {
-            VStack(spacing: 8) {
+        HStack(spacing: 0) {
+            VStack(spacing: 0) {
                 ForEach(0..<3) { index in
                     Button(intent: WidgetPageIntent(slot: entry.slot, page: index)) {
-                        AndroidWidgetGlyph(kind: ["clock", "bluetooth", "card"][index]).frame(width: 22, height: 22)
-                            .frame(width: 34, height: 34)
+                        AndroidWidgetGlyph(kind: ["clock", "bluetooth", "card"][index]).frame(width: 20, height: 20)
+                            .frame(width: 38, height: 38)
                             .background(.white.opacity(entry.selection.tab == index ? 0.18 : 0), in: RoundedRectangle(cornerRadius: 10))
-                    }.accessibilityLabel(["设备", "附近设备", "账单"][index])
+                    }.frame(maxHeight: .infinity).accessibilityLabel(["设备", "附近设备", "账单"][index])
                 }
-                if family == .systemLarge { Spacer(minLength: 0) }
-            }.frame(width: 36)
+            }.frame(width: 48).padding(.vertical, 4)
             Rectangle().fill(.white.opacity(0.16)).frame(width: 1)
+            Group {
             if entry.selection.tab == 1 { nearby }
             else if entry.selection.tab == 2 { bills }
             else {
-                VStack(alignment: .leading, spacing: 8) {
+                VStack(alignment: .leading, spacing: 5) {
                     header
-                    Text(device?.detail ?? "点按钮选附近设备").foregroundStyle(.white.opacity(0.65)).lineLimit(1)
-                    HStack(spacing: 10) { readout; power.frame(width: family == .systemLarge ? 80 : 64) }
-                    if device?.running == true { Text("设备状态以最近同步为准").font(.system(size: 9)).foregroundStyle(.white.opacity(0.55)) }
+                    Text(device?.detail ?? "点按钮选附近设备").font(.system(size: 9)).foregroundStyle(.white.opacity(0.65)).lineLimit(1).padding(.leading, 10)
+                    HStack(spacing: 10) { readout; power.frame(width: 64) }
                 }
             }
+            }.padding(10).transition(.identity)
         }
     }
     private var nearby: some View {
         VStack(alignment: .leading, spacing: 7) {
-            HStack {
-                Text("附近设备").fontWeight(.semibold)
+            HStack(spacing: 3) {
+                Text("附近设备").font(.system(size: 11))
+                if let date = snapshot.nearbyDate { Text("(\(WidgetDisplayPolicy.syncedAgo(date, now: entry.date)))").font(.system(size: 8)).foregroundStyle(.white.opacity(0.6)).lineLimit(1).minimumScaleFactor(0.7) }
                 Spacer(minLength: 0)
-                Link(destination: url(.nearby)) { Image(systemName: "arrow.clockwise") }
+                HStack(spacing: 2) {
+                    Text("●强").foregroundStyle(.green)
+                    Text("●中").foregroundStyle(.orange)
+                    Text("●弱").foregroundStyle(.red)
+                }.fixedSize()
+                Button(intent: WidgetOpenIntent(url(.refreshNearby))) { Image(systemName: "arrow.clockwise").frame(width: 22, height: 22) }
             }
-            if let date = snapshot.nearbyDate { Text("（\(WidgetDisplayPolicy.syncedAgo(date, now: entry.date))）").font(.system(size: 9)).foregroundStyle(.white.opacity(0.6)) }
-            let devices = snapshot.devices.filter { snapshot.nearbyIDs.contains($0.id) && ($0.selectable || $0.running) }
+            .font(.system(size: 8))
+            let devices = snapshot.nearbyIDs.compactMap { sn in snapshot.devices.first { $0.id == sn && ($0.selectable || $0.running) } }
             if devices.isEmpty { Text("未扫描到附近设备").foregroundStyle(.white.opacity(0.6)); Spacer(minLength: 0) }
-            ForEach(Array(devices.prefix(family == .systemLarge ? 5 : 2))) { item in
+            ForEach(Array(devices.prefix(2))) { item in
+              Button(intent: WidgetOpenIntent(WidgetCommand.url(.device, snapshot: snapshot, device: item))) {
                 HStack(spacing: 6) {
-                    Text(item.emoji)
+                    Text(item.emoji).frame(width: 25, height: 25).background(.white.opacity(0.08), in: Circle()).overlay(Circle().strokeBorder(.white.opacity(0.12), lineWidth: 1))
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(item.name).lineLimit(1).truncationMode(.head)
-                        if let rssi = item.rssi { Text("\(rssi) dBm").font(.system(size: 9)).foregroundStyle(rssi >= -70 ? .green : rssi >= -85 ? .orange : .red) }
+                        Text(item.name).font(.system(size: 11)).lineLimit(1).truncationMode(.head)
+                        HStack(spacing: 3) {
+                            Text(item.detail).foregroundStyle(.white.opacity(0.65)).lineLimit(1)
+                            if let rssi = item.rssi { Text("● \(rssi) dBm").foregroundStyle(rssi >= -70 ? .green : rssi >= -85 ? .orange : .red).fixedSize() }
+                        }.font(.system(size: 8))
                     }.frame(maxWidth: .infinity, alignment: .leading)
-                    Button("选用", intent: WidgetPickIntent(slot: entry.slot, sn: item.id, token: snapshot.token))
-                        .font(.system(size: 10)).padding(7).modifier(Glass())
-                }
+                    Text("选用").font(.system(size: 10)).padding(.horizontal, 9).padding(.vertical, 4).modifier(Glass(radius: 20))
+                }.padding(7).frame(maxWidth: .infinity, maxHeight: .infinity).modifier(Glass())
+              }
             }
-            Spacer(minLength: 0)
         }.frame(maxWidth: .infinity, alignment: .leading)
     }
     private var bills: some View {
         VStack(alignment: .leading, spacing: 7) {
-            HStack {
-                VStack(alignment: .leading) { Text(snapshot.balanceTitle).font(.system(size: 10)); Text(snapshot.balance).font(.system(size: 20, weight: .semibold)) }
+            Button(intent: WidgetOpenIntent(url(.bills))) {
+              HStack {
+                VStack(alignment: .leading, spacing: 2) { Text(snapshot.balanceTitle).font(.system(size: 9)).foregroundStyle(.white.opacity(0.65)); HStack(spacing: 5) { AndroidWidgetGlyph(kind: "card").frame(width: 14, height: 14); Text(snapshot.balance).font(.system(size: 19, weight: .semibold)).lineLimit(1).minimumScaleFactor(0.6) } }
                 Spacer(minLength: 0)
-                Link(destination: url(.bills)) { Image(systemName: "chevron.right") }
+                Image(systemName: "chevron.right")
+              }.padding(8).modifier(Glass())
             }
+            Text("最近消费").font(.system(size: 10)).foregroundStyle(.white.opacity(0.8))
             if snapshot.bills.isEmpty { Text("在 App 里刷新账单").foregroundStyle(.white.opacity(0.6)) }
-            ForEach(Array(snapshot.bills.prefix(family == .systemLarge ? 5 : 2).enumerated()), id: \.offset) { _, bill in
+            ForEach(Array(snapshot.bills.prefix(2).enumerated()), id: \.offset) { _, bill in
+              Button(intent: WidgetOpenIntent(WidgetCommand.url(.billDetail, snapshot: snapshot, device: nil, billID: bill.id ?? ""))) {
                 HStack(spacing: 5) {
-                    Text(bill.emoji)
+                    Text(bill.emoji).frame(width: 25, height: 25).background(.white.opacity(0.08), in: Circle()).overlay(Circle().strokeBorder(.white.opacity(0.12), lineWidth: 1))
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(bill.name).lineLimit(1).truncationMode(.head)
-                        Text(bill.time).font(.system(size: 9)).foregroundStyle(.white.opacity(0.6)).lineLimit(1)
+                        Text(bill.name).font(.system(size: 11)).lineLimit(1).truncationMode(.head)
+                        Text(String(bill.time.prefix(16))).font(.system(size: 8)).foregroundStyle(.white.opacity(0.6)).lineLimit(1)
                     }
                     Spacer(minLength: 0)
                     Text(bill.money).font(.system(size: 11)).fixedSize()
-                }
+                }.frame(maxWidth: .infinity, maxHeight: .infinity)
+              }
             }
-            Spacer(minLength: 0)
         }
     }
 }
 
-@available(iOS 17.0, *)
-struct LinYuTileWidget: Widget {
-    let kind = "LinYuTile"
-    var body: some WidgetConfiguration {
-        AppIntentConfiguration(kind: kind, intent: LinYuWidgetConfiguration.self, provider: LinYuWidgetProvider()) { LinYuWidgetView(entry: $0, layout: "tile") }
-            .configurationDisplayName("淋浴 · 开关").description("系统小尺寸快捷开关；iOS 不支持主屏幕 1×1 小组件")
-            .supportedFamilies([.systemSmall]).contentMarginsDisabled()
-    }
-}
 @available(iOS 17.0, *)
 struct LinYuPanelWidget: Widget {
     let kind = "LinYuPanel"
@@ -297,11 +301,11 @@ struct LinYuWideWidget: Widget {
     var body: some WidgetConfiguration {
         AppIntentConfiguration(kind: kind, intent: LinYuWidgetConfiguration.self, provider: LinYuWidgetProvider()) { LinYuWidgetView(entry: $0, layout: "wide") }
             .configurationDisplayName("淋浴 · 多功能").description("设备、附近设备、账单三页切换")
-            .supportedFamilies([.systemMedium, .systemLarge]).contentMarginsDisabled()
+            .supportedFamilies([.systemMedium]).contentMarginsDisabled()
     }
 }
 #if LINYU_WIDGET_EXTENSION
 @main struct LinYuWidgets: WidgetBundle {
-    var body: some Widget { LinYuTileWidget(); LinYuPanelWidget(); LinYuWideWidget() }
+    var body: some Widget { LinYuPanelWidget(); LinYuWideWidget() }
 }
 #endif

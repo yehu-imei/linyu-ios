@@ -210,8 +210,14 @@ final class ShowerFlow: ObservableObject {
     }
 
     /// 清掉这台设备的本地使用状态
+    private var completedNotificationTargets: [DeviceNotificationTarget] = []
     private func clearDeviceState(_ snCode: String) {
         guard workScope.isCurrent else { return }
+        if let record = ActiveOrderStore.find(snCode), Prefs.startedAt(snCode) > 0 {
+            completedNotificationTargets.append(DeviceNotificationTarget(accountKey: AppNotifications.accountKey,
+                snCode: snCode, orderNo: record.orderNo, startedAt: Prefs.startedAt(snCode)))
+            completedNotificationTargets = Array(completedNotificationTargets.suffix(32))
+        }
         deviceRevisions[snCode, default: 0] &+= 1
         // 不 cancel：此处也可能由监控任务自身调用，它后面仍须完成结算。
         // 先撤销身份，旧任务返回时不能再次处理或移除新的监控任务。
@@ -1213,12 +1219,15 @@ final class ShowerFlow: ObservableObject {
         guard workScope.isCurrent else { return true }
         guard !controlGate.isBusy else { return false }
         let target = action.target
+        // 完成关阀后晚到的同笔点击是重复投递，不是新错误；绝不据此关闭新订单。
+        if target.accountKey == AppNotifications.accountKey,
+           completedNotificationTargets.contains(where: { $0.isSameSession(as: target) }) { return true }
         guard workScope.isCurrent,
               target.matches(accountKey: AppNotifications.accountKey,
                              record: ActiveOrderStore.find(target.snCode),
                              startedAt: Prefs.startedAt(target.snCode)),
               let record = ActiveOrderStore.find(target.snCode) else {
-            toast = "通知对应的订单已失效，请在首页确认设备状态"
+            toast = "订单已变化，请确认设备状态"
             return true
         }
         guard let token = controlGate.begin() else { return false }
@@ -1285,7 +1294,7 @@ final class ShowerFlow: ObservableObject {
                              startedAt: Prefs.startedAt(target.snCode)),
               target.matchesServerOrder(record: record, orderNo: response.data?.orderNo,
                                         isOwner: response.data?.isOwner) else {
-            toast = "无法确认通知对应的原订单，请在首页确认后再停止"
+            toast = "无法确认原订单，请在首页检查"
             return false
         }
         return true
@@ -1542,6 +1551,7 @@ final class ShowerFlow: ObservableObject {
     /// 退出登录 / 会话失效时清干净
     func reset() {
         workScope.cancel()
+        completedNotificationTargets.removeAll()
         ble.disconnect()
         mqtt.disconnect()
         liveConsumed = nil

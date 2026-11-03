@@ -7,6 +7,9 @@ import WidgetKit
 @MainActor final class WidgetBridge: ObservableObject {
     static let shared = WidgetBridge()
     @Published private(set) var command: WidgetCommand?
+    @Published var pendingDeviceSN: String?
+    @Published var pendingBillID: String?
+    private var acceptedSnapshot: WidgetSnapshot?
     private var handling = false
     private var lastReload = Date.distantPast
     private var lastSnapshot: WidgetSnapshot?
@@ -15,10 +18,15 @@ import WidgetKit
     func receive(_ url: URL) {
         guard let request = WidgetCommand(url: url) else { return }
         guard command == nil, !handling else { return }
+        // 在接到点击时保留身份；回前台刷新台账不能把已受理动作变成“旧按钮”。
+        acceptedSnapshot = WidgetSharedStore.read()
         command = request
     }
     func clear() {
         command = nil
+        acceptedSnapshot = nil
+        pendingDeviceSN = nil
+        pendingBillID = nil
         consumed.removeAll()
         lastSnapshot = nil
         WidgetSharedStore.write(WidgetSnapshot())
@@ -35,6 +43,9 @@ import WidgetKit
         next.busy = flow.controlBusy || handling
         next.message = flow.isStarting ? "正在开启…" : flow.isStopping ? "正在关闭…" : handling ? "正在处理…" : nil
         let orders = ActiveOrderStore.all()
+        let billSnapshots = store.bills.map { WidgetBill(name: $0.displayNamePart, emoji: $0.deviceEmoji,
+            time: $0.consumeDate ?? "", money: $0.yuan.map { "-" + MoneyFormat.withSymbol($0) } ?? "—",
+            id: $0.id, deviceSN: $0.deviceSnCode, detail: $0.deviceTypeLabel, amount: $0.yuan) }
         var infos: [String: WidgetDevice] = [:]
         for (sn, info) in store.deviceInfos {
             infos[sn] = WidgetDevice(id: sn, name: info.displayName, detail: info.typeLabel, emoji: info.typeEmoji,
@@ -59,7 +70,9 @@ import WidgetKit
         } else { next.nearbyDate = scanner.devices.map(\.lastSeen).max() }
         for sn in Array(infos.keys) {
             infos[sn]?.occupied = flow.deviceOwner[sn] == false
-            infos[sn]?.lastConsume = Prefs.lastConsumeFor(sn)
+            if let item = infos[sn] {
+                infos[sn]?.lastConsume = WidgetDisplayPolicy.lastConsume(cached: Prefs.lastConsumeFor(sn), device: item, bills: billSnapshots)
+            }
             if let order = orders.first(where: { $0.snCode == sn }) {
                 infos[sn]?.running = true
                 infos[sn]?.orderNo = order.orderNo
@@ -68,8 +81,7 @@ import WidgetKit
             }
         }
         next.devices = infos.values.sorted { $0.id < $1.id }
-        next.bills = store.bills.prefix(5).map { WidgetBill(name: $0.displayNamePart, emoji: $0.deviceEmoji,
-             time: $0.consumeDate ?? "", money: $0.yuan.map { "-" + MoneyFormat.withSymbol($0) } ?? "—") }
+        next.bills = Array(billSnapshots.prefix(5))
         let identityChanged = previous.controlIdentity != next.controlIdentity
         next.token = identityChanged ? UUID().uuidString : previous.token
         // 不为每秒计时生成新快照，WidgetKit 使用开始时间自行渲染时间文本。
@@ -91,11 +103,18 @@ import WidgetKit
     /// URL 只承接已经渲染的组件按钮；校验随机身份、账号、设备、订单，防止旧按钮操作新单。
     func process(store: AppDataStore, flow: ShowerFlow, scanner: BLEScanner) async -> WidgetCommandKind? {
         guard !handling, !flow.controlBusy, let request = command else { return nil }
+        let snapshot = acceptedSnapshot ?? WidgetSharedStore.read()
+        acceptedSnapshot = nil
         command = nil
         guard Session.shared.isLoggedIn else { return .home }
         // 普通导航不发起水控，不应因共享组未同步而被旧令牌拦截。
         if request.kind == .home || request.kind == .bills || request.kind == .nearby { return request.kind }
-        let snapshot = WidgetSharedStore.read()
+        if request.kind == .device || request.kind == .billDetail {
+            guard request.owner == AppNotifications.accountKey else { return .home }
+            if request.kind == .device { pendingDeviceSN = request.sn }
+            else { pendingBillID = request.billID }
+            return request.kind
+        }
         guard request.matches(snapshot), request.owner == AppNotifications.accountKey else {
             flow.toast = "组件状态已更新，请刷新后操作"
             sync(store: store, flow: flow, scanner: scanner, force: true)
@@ -103,7 +122,7 @@ import WidgetKit
         }
         let generation = Session.shared.requestGeneration
         let actionID = "\(request.token):\(request.kind.rawValue):\(request.sn)"
-        guard !consumed.contains(actionID) else { flow.toast = "请刷新组件后重试"; return .home }
+        guard !consumed.contains(actionID) else { return .home }
         consumed.insert(actionID)
         handling = true
         defer {
@@ -117,10 +136,12 @@ import WidgetKit
             }
             sync(store: store, flow: flow, scanner: scanner, force: true)
         }
-        if request.kind == .refresh {
+        if request.kind == .refresh || request.kind == .refreshNearby {
+            if request.kind == .refreshNearby { scanner.start() }
             await flow.reconcileOnResume()
             await store.reload()
-            return .home
+            flow.toast = "已刷新"
+            return request.kind == .refreshNearby ? .nearby : .home
         }
         do {
             guard let info = try await DeviceLookup.load(request.sn) else { flow.toast = "设备不存在"; return .home }
@@ -151,6 +172,6 @@ import WidgetKit
                 await flow.open(device: info, peripheral: scanner.peripheral(forSn: request.sn), central: scanner.manager)
             }
         } catch { flow.toast = LoginFeedback.message(error) }
-        return .home
+        return request.kind
     }
 }

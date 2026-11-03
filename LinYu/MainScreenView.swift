@@ -13,6 +13,7 @@ import SwiftUI
 /// [设备卡片…]
 /// ```
 struct MainScreenView: View {
+    @ObservedObject private var widgets = WidgetBridge.shared
     @EnvironmentObject private var session: Session
     @Environment(\.appColors) private var colors
     @Environment(\.isDarkMode) private var isDark
@@ -160,6 +161,8 @@ struct MainScreenView: View {
         // 弹窗全部走**居中卡片**（Material3 AlertDialog 的样子），
         // 不用 .sheet —— 那会从底部升上来，和 Android 完全不一样
         .overlay { dialogLayer }
+        .task { openWidgetDevice() }
+        .onChange(of: widgets.pendingDeviceSN) { _ in openWidgetDevice() }
     }
 
     // MARK: - 弹窗层
@@ -491,6 +494,12 @@ struct MainScreenView: View {
             scanner.register(info: info, advertisedSN: sn)
             if let ledgerSN = info.snCode { await flow.refreshDeviceStatus(ledgerSN) }
         }
+    }
+
+    private func openWidgetDevice() {
+        guard let sn = widgets.pendingDeviceSN, !sn.isEmpty else { return }
+        widgets.pendingDeviceSN = nil
+        openDetail(sn)
     }
 
     /// 这台设备有没有活跃订单。

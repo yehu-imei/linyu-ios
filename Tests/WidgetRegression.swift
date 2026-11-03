@@ -48,6 +48,24 @@ import Foundation
         snapshot.devices[0].startedAt = 456
         check(before != snapshot.controlIdentity, "新会话时间使旧控制身份失效")
         check(snapshot.selected("")?.id == "A", "默认选中上次设备")
+        let detail = WidgetCommand(url: WidgetCommand.url(.billDetail, snapshot: snapshot, device: nil, billID: "bill/123 中文"))!
+        check(detail.kind == .billDetail && detail.billID == "bill/123 中文", "具体账单点击保留完整账单身份")
+        let deviceLink = WidgetCommand(url: WidgetCommand.url(.device, snapshot: snapshot, device: snapshot.devices[0]))!
+        check(deviceLink.kind == .device && deviceLink.sn == "A", "附近设备点击进入对应设备详情")
+        check(WidgetCommand(url: WidgetCommand.url(.refreshNearby, snapshot: snapshot, device: nil))?.kind == .refreshNearby, "刷新与普通附近导航使用不同动作")
+        check(WidgetCommand(url: URL(string: "linyu-widget://start?owner=x&owner=y&sn=A&order=&start=0")!) == nil, "拒绝重复参数绕过身份校验")
+        let device = WidgetDevice(id: "water", name: "320房", detail: "洗手台热水器", emoji: "🪥")
+        let wrong = WidgetBill(name: "320房", emoji: "🚿", time: "2026-11-03", money: "-¥1.84", detail: "卫生间热水器", amount: 1.84)
+        var right = wrong; right.detail = device.detail; right.amount = 0.5
+        check(WidgetDisplayPolicy.lastConsume(cached: 0, device: device, bills: [wrong]) == 0, "同房不同设备类型不能串用消费")
+        check(WidgetDisplayPolicy.lastConsume(cached: 0, device: device, bills: [wrong, right]) == 0.5, "已有账单补齐对应设备消费")
+        check(WidgetDisplayPolicy.lastConsume(cached: 0.8, device: device, bills: [right]) == 0.8, "较旧账单不覆盖已记录的设备消费")
+        right.deviceSN = "other"
+        check(WidgetDisplayPolicy.lastConsume(cached: 0, device: device, bills: [right]) == 0, "明确不同序列号时不按相同名字猜测")
+        right.deviceSN = "water"; right.name = "旧设备名"
+        check(WidgetDisplayPolicy.lastConsume(cached: 0, device: device, bills: [right]) == 0.5, "序列号精确匹配允许名称改变")
+        let oldBill = Data(#"{"name":"320房","emoji":"🚿","time":"2026-11-03","money":"-¥1.84"}"#.utf8)
+        check(try JSONDecoder().decode(WidgetBill.self, from: oldBill).id == nil, "升级兼容旧版组件账单缓存")
         let group = "group.com.hualala.linyu"
         let profile = try PropertyListSerialization.data(fromPropertyList: ["Entitlements": ["com.apple.security.application-groups": [group + ".TEAM", "group.unrelated"]]], format: .xml, options: 0)
         check(WidgetGroupPolicy.candidates(profile: profile, original: group) == [group + ".TEAM"], "使用本应用签名后的组名且不读取无关应用组")
