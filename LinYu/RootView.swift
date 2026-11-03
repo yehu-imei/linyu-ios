@@ -26,7 +26,7 @@ struct RootView: View {
         // 被挤下线：用系统弹窗告知原因，关掉才真的回到登录页
         // （对照 Android 的强制下线弹窗。不告知的话用户只会看到「莫名其妙退出了」）
         .alert(
-            "账号在别处登录",
+            "登录已失效",
             isPresented: Binding(
                 get: { session.kickedReason != nil },
                 set: { if !$0 { _ = session.consumeKickReason() } }
@@ -34,7 +34,7 @@ struct RootView: View {
         ) {
             Button("重新登录", role: .cancel) { _ = session.consumeKickReason() }
         } message: {
-            Text("当前登录已失效。设备可能仍在用水，请重新登录核对，或立即使用官方客户端、联系人工处理。")
+            Text("请重新登录。若正在用水，请确认设备已关闭；无法关闭时请使用官方应用或联系工作人员。")
         }
         // 遮罩盖在**所有内容之上**（包括弹窗），否则过渡时会看到底层先变色
         .overlay {

@@ -36,6 +36,8 @@ struct WidgetSnapshot: Codable, Equatable {
     var message: String?
     var busy = false
 
+    var emptyTitle: String { message == nil ? "未登录" : "等待同步" }
+
     func selected(_ id: String) -> WidgetDevice? {
         let chosen = id.isEmpty ? lastDevice : id
         return devices.first { $0.id == chosen && ($0.selectable || $0.running) }
@@ -119,18 +121,18 @@ enum WidgetSharedStore {
         return [.atomic]
         #endif
     }
-    static let directory: URL? = {
+    static var directory: URL? {
         let profile = Bundle.main.url(forResource: "embedded", withExtension: "mobileprovision").flatMap { try? Data(contentsOf: $0) }
         for identifier in WidgetGroupPolicy.candidates(profile: profile, original: group) {
             if let url = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: identifier) { return url }
         }
         return nil
-    }()
+    }
     static func read() -> WidgetSnapshot {
         guard let url = directory?.appendingPathComponent("widget-snapshot.json"),
               let data = try? Data(contentsOf: url), let snapshot = try? JSONDecoder().decode(WidgetSnapshot.self, from: data) else {
             var empty = WidgetSnapshot()
-            empty.message = directory == nil ? "请保留小组件扩展和共享权限" : "请先打开淋浴"
+            empty.message = directory == nil ? "小组件无法同步，请检查安装权限" : "请先打开淋浴"
             return empty
         }
         return snapshot

@@ -93,13 +93,14 @@ import WidgetKit
         guard !handling, !flow.controlBusy, let request = command else { return nil }
         command = nil
         guard Session.shared.isLoggedIn else { return .home }
+        // 普通导航不发起水控，不应因共享组未同步而被旧令牌拦截。
+        if request.kind == .home || request.kind == .bills || request.kind == .nearby { return request.kind }
         let snapshot = WidgetSharedStore.read()
         guard request.matches(snapshot), request.owner == AppNotifications.accountKey else {
-            flow.toast = "组件已过期，请刷新"
+            flow.toast = "组件状态已更新，请刷新后操作"
             sync(store: store, flow: flow, scanner: scanner, force: true)
             return .home
         }
-        if request.kind == .home || request.kind == .bills || request.kind == .nearby { return request.kind }
         let generation = Session.shared.requestGeneration
         let actionID = "\(request.token):\(request.kind.rawValue):\(request.sn)"
         guard !consumed.contains(actionID) else { flow.toast = "请刷新组件后重试"; return .home }

@@ -8,6 +8,10 @@ import Foundation
             if !passed { failures += 1 }
         }
         var snapshot = WidgetSnapshot()
+        check(snapshot.emptyTitle == "未登录", "无账户且没有同步错误才显示未登录")
+        snapshot.message = "小组件无法同步，请检查安装权限"
+        check(snapshot.emptyTitle == "等待同步", "共享权限错误不误报退出登录")
+        snapshot.message = nil
         snapshot.owner = "school:account"
         snapshot.lastDevice = "A"
         snapshot.devices = [WidgetDevice(id: "A", name: "320房", detail: "热水器", emoji: "🚿"),

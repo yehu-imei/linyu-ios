@@ -125,7 +125,7 @@ struct LinYuWidgetView: View {
         return device.running ? .stop : .start
     }
     private var title: String {
-        if snapshot.owner.isEmpty { return "未登录" }
+        if snapshot.owner.isEmpty { return snapshot.emptyTitle }
         guard let device else { return "请先选择设备" }
         return layout == "panel" ? String(device.name.split(separator: " ").last ?? Substring(device.name)) : device.name
     }
@@ -143,7 +143,7 @@ struct LinYuWidgetView: View {
             Color(red: 15/255, green: 23/255, blue: 32/255)
                 .overlay(LinearGradient(colors: [.white.opacity(0.20), .white.opacity(0.045)], startPoint: .topLeading, endPoint: .bottomTrailing))
         }
-        .widgetURL(url(.home))
+        .widgetURL(url(layout == "tile" && !(snapshot.busy && !staleBusy) ? action : .home))
         .privacySensitive()
     }
     private var tile: some View {
@@ -278,7 +278,7 @@ struct LinYuTileWidget: Widget {
     let kind = "LinYuTile"
     var body: some WidgetConfiguration {
         AppIntentConfiguration(kind: kind, intent: LinYuWidgetConfiguration.self, provider: LinYuWidgetProvider()) { LinYuWidgetView(entry: $0, layout: "tile") }
-            .configurationDisplayName("淋浴 · 开关").description("对应安卓方形快捷开关，操作在应用内执行")
+            .configurationDisplayName("淋浴 · 开关").description("系统小尺寸快捷开关；iOS 不支持主屏幕 1×1 小组件")
             .supportedFamilies([.systemSmall]).contentMarginsDisabled()
     }
 }

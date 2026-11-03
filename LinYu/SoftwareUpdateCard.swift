@@ -79,7 +79,7 @@ struct SoftwareUpdateCard: View {
     }
     private var status: (String, Color) {
         if releases.checking || !releases.checked { return ("正在检测更新…", colors.textSecondary) }
-        if releases.failed { return ("检测失败（多为网络原因）", colors.warning) }
+        if releases.failed { return ("检查更新失败，请重试", colors.warning) }
         if hasUpdate { return ("发现新版本 \(releases.releases.first?.tagName ?? "")", colors.accent) }
         return ("当前已是最新版本", colors.success)
     }

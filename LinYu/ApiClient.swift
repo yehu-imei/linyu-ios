@@ -14,11 +14,11 @@ enum ApiError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .business(let code, let msg): return "\(LoginFeedback.chineseMessage(msg))（\(code)）"
-        case .transport(let msg): return LoginFeedback.chineseMessage(msg, fallback: "网络异常，请重试")
+        case .business(_, let msg): return LoginFeedback.chineseMessage(msg)
+        case .transport(let msg): return LoginFeedback.chineseMessage(msg, fallback: "网络连接失败，请检查网络")
         case .notLoggedIn: return "未登录"
         case .unauthorized: return "登录已失效，请重新登录"
-        case .http: return "服务器异常，请稍后重试"
+        case .http: return "服务暂不可用，请稍后重试"
         }
     }
 }
@@ -292,7 +292,7 @@ struct ApiClient {
         } catch {
             let text = String(data: data, encoding: .utf8) ?? ""
             AppLog.shared.e("解析失败 \(path)", "\(error.localizedDescription)\n原文: \(text.prefix(300))")
-            throw ApiError.transport("响应解析失败")
+            throw ApiError.transport("服务响应异常，请重试")
         }
     }
 }

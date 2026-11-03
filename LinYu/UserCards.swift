@@ -76,7 +76,7 @@ struct AccountCardView: View {
         BaseCard {
             VStack(alignment: .leading, spacing: 10) {
                 if !store.profileLoaded {
-                    ForEach(["姓名", "手机号", "学校", "学号"], id: \.self) { label in
+                    ForEach(["姓名", "账户", "学校", "学号"], id: \.self) { label in
                         InfoRow(label: label, value: "加载中...")
                             .redacted(reason: .placeholder)
                     }
@@ -84,7 +84,7 @@ struct AccountCardView: View {
                 if let name = info?.name, !name.isEmpty {
                     InfoRow(label: "姓名", value: name)
                 }
-                InfoRow(label: "手机号", value: session.telephone)
+                InfoRow(label: "账户", value: session.telephone)
                 if !projectName.isEmpty {
                     InfoRow(label: "学校", value: projectName)
                 }
@@ -342,7 +342,7 @@ struct TrendToggleCardView: View {
                     Text("消费趋势")
                         .font(.system(size: 16, weight: .semibold))
                         .foregroundStyle(colors.textPrimary)
-                    Text(enabled ? "账单页显示趋势图" : "账单页不显示趋势图")
+                    Text(enabled ? "在账单页显示消费统计图" : "已隐藏账单页的消费统计图")
                         .font(.system(size: 12))
                         .foregroundStyle(colors.textSecondary)
                 }

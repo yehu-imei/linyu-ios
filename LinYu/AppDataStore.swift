@@ -53,9 +53,9 @@ final class AppDataStore: ObservableObject {
     }
     var useCodeBlockReason: String? {
         if useCode?.resetAvailability == 0 {
-            return useCode?.resetAvailabilityWarMark ?? "1天只能领取一次使用码"
+            return (useCode?.resetAvailabilityWarMark).map { LoginFeedback.chineseMessage($0, fallback: "当前无法领取，请稍后重试") } ?? "每天只能领取一次使用码"
         }
-        return useCodeQuotaExhausted ? "今日换码次数已用完，请明天再试" : nil
+        return useCodeQuotaExhausted ? "今日换码次数已用完，请明天再来" : nil
     }
     private var billsTask: Task<Void, Never>?
     private var profileRefreshed = false
@@ -172,7 +172,7 @@ final class AppDataStore: ObservableObject {
         useCodeRevision += 1
         useCode = UseCodeData(useCode: code, useCodeStatus: useCode?.useCodeStatus,
             useCodeRandom: useCode?.useCodeRandom, useCodeStartTime: useCode?.useCodeStartTime,
-            resetAvailability: 0, resetAvailabilityWarMark: "1天只能领取一次使用码")
+            resetAvailability: 0, resetAvailabilityWarMark: "每天只能领取一次使用码")
         useCodeLoaded = true
     }
 
@@ -250,7 +250,7 @@ final class AppDataStore: ObservableObject {
             if let info {
                 putDeviceInfo(info, sn: sn)
             } else {
-                deviceLookupMessages[sn] = "服务端没有这台设备的记录（\(sn)）"
+                deviceLookupMessages[sn] = "未查询到该设备，请检查设备码"
                 retryAfter[sn] = Date().addingTimeInterval(60)
                 AppLog.shared.w("台账查不到 \(sn)（success=true 但 data 为空）")
             }
@@ -258,7 +258,7 @@ final class AppDataStore: ObservableObject {
             guard sessionIsCurrent else { return }
             let message = LoginFeedback.message(error)
             deviceLookupMessages[sn] = message.contains("网络") ? message : "获取设备信息失败，请稍后重试"
-            if case let ApiError.business(_, reason) = error { deviceLookupMessages[sn] = reason }
+            if case let ApiError.business(_, reason) = error { deviceLookupMessages[sn] = LoginFeedback.chineseMessage(reason) }
             retryAfter[sn] = Date().addingTimeInterval(10)
             AppLog.shared.w("台账请求失败 \(sn)：\(error.localizedDescription)")
         }

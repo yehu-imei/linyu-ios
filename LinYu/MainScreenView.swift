@@ -547,7 +547,7 @@ struct MainScreenView: View {
         } else {
             do {
                 guard let d = try await DeviceLookup.load(sn) else {
-                    flow.toast = "服务端没有这台设备的记录（\(sn)）"
+                    flow.toast = "未查询到该设备，请检查设备码"
                     return
                 }
                 await store.putDeviceInfo(d, sn: sn)
@@ -574,7 +574,7 @@ struct MainScreenView: View {
     private func bindBySn(_ sn: String) async {
         await resolveDevice(sn)
         guard let info = store.deviceInfos[sn] else {
-            flow.toast = store.deviceLookupMessages[sn] ?? "服务端没有这台设备的记录（\(sn)）"
+            flow.toast = store.deviceLookupMessages[sn] ?? "未查询到该设备，请检查设备码"
             return
         }
         detailDevice = info

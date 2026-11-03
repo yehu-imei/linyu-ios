@@ -143,7 +143,7 @@ final class ShowerFlow: ObservableObject {
     private func beginControl() -> UUID? {
         guard workScope.isCurrent else { return nil }
         guard let token = controlGate.begin() else {
-            toast = "正在处理设备操作，请稍候"
+            toast = "正在操作，请稍候"
             return nil
         }
         return token
@@ -289,7 +289,7 @@ final class ShowerFlow: ObservableObject {
             return
         }
         guard !sn.isEmpty else {
-            errorMessage = "设备信息不完整（缺少 snCode）"
+            errorMessage = "设备信息不完整，请刷新"
             return
         }
 
@@ -301,7 +301,7 @@ final class ShowerFlow: ObservableObject {
         }
     }
 
-    /// 用户在「要用蓝牙方式开启吗？」里点了确认
+    /// 用户在「尝试蓝牙开启？」里点了确认
     func confirmBleOpen() async {
         guard workScope.isCurrent else { return }
         guard let device = bleConfirmDevice else { return }
@@ -401,7 +401,7 @@ final class ShowerFlow: ObservableObject {
 
     private func openBle(_ device: DeviceInfo, peripheral: CBPeripheral?, central: CBCentralManager?, allowNewOrder: Bool) async {
         guard let peripheral, let central else {
-            errorMessage = "拿不到设备连接（请重新扫描后再试）"
+            errorMessage = "未找到设备，请重新扫描"
             return
         }
         currentPeripheral = peripheral
@@ -433,7 +433,7 @@ final class ShowerFlow: ObservableObject {
         let expectMac = device.connectMac
         if !st.mac.isEmpty, !expectMac.isEmpty, st.mac.uppercased() != expectMac.uppercased() {
             ble.disconnect()
-            errorMessage = "连错设备了（设备报 \(st.mac)）"
+            errorMessage = "设备不匹配，请重新扫描"
             AppLog.shared.e("设备身份不匹配：期望 \(expectMac)，实际 \(st.mac)")
             return
         }
@@ -467,7 +467,7 @@ final class ShowerFlow: ObservableObject {
             // 补结算已清掉设备记录（state 回 0）。断开连接，让用户重新点一次开阀——
             // 重开阀需要一次全新的连接（设备只在新连接里给出可用的会话参数）。
             openingText = ""
-            toast = "已结清上一笔遗留账单，请重新点击开阀"
+            toast = "上笔账单已结清，请重新开启"
             return
         }
         guard st.isIdle else {
@@ -500,7 +500,7 @@ final class ShowerFlow: ObservableObject {
             }
             ble.disconnect()
             openingOccupied = true
-            errorMessage = "设备正在被使用（state=\(st.state)）"
+            errorMessage = "设备当前不可用，请稍后重试"
             return
         }
 
@@ -515,7 +515,7 @@ final class ShowerFlow: ObservableObject {
         openingText = "正在向云端申请费率…"
         guard let deviceId = device.deviceId.map(String.init) else {
             ble.disconnect()
-            errorMessage = "设备缺少 deviceId"
+            errorMessage = "设备信息不完整，请刷新"
             return
         }
         let xfModel = "0"
@@ -529,7 +529,7 @@ final class ShowerFlow: ObservableObject {
             randomNumber: st.randomNumber
         ) else {
             ble.disconnect()
-            errorMessage = "签名计算失败（登录态可能失效）"
+            errorMessage = "设备验证失败，请重新登录"
             return
         }
 
@@ -550,7 +550,7 @@ final class ShowerFlow: ObservableObject {
             rateResp = try ApiClient.decode(BluetoothRateOrderData.self, from: rateData, path: "bluetoothRateOrder")
         } catch {
             ble.disconnect()
-            errorMessage = "费率响应异常，请重试"
+            errorMessage = "获取计费信息失败，请重试"
             return
         }
 
@@ -559,7 +559,7 @@ final class ShowerFlow: ObservableObject {
               !downBytes.isEmpty
         else {
             ble.disconnect()
-            errorMessage = rateResp.displayMessage ?? "云端没返回有效费率包"
+            errorMessage = rateResp.displayMessage ?? "获取计费信息失败，请重试"
             return
         }
         AppLog.shared.i("云端下发费率包 \(downBytes.count)B")
@@ -568,7 +568,7 @@ final class ShowerFlow: ObservableObject {
         openingText = "正在写入费率并开阀…"
         guard await ble.writeRate(downBytes) else {
             ble.disconnect()
-            errorMessage = "未能确认设备已开启，请确认水流状态后决定是否重试"
+            errorMessage = "开启结果未确认，请检查是否出水，勿重复开启"
             return
         }
 
@@ -642,7 +642,7 @@ final class ShowerFlow: ObservableObject {
         let resolved = await CloudShower.resolveOrderNo(snCode: order.snCode)
         guard workScope.isCurrent else { return }
         guard order.orderNo.isEmpty || resolved.isEmpty || resolved == order.orderNo else {
-            toast = "设备订单已变化，请刷新设备状态后操作"
+            toast = "订单状态已变化，请刷新"
             startTimer()
             return
         }
@@ -660,7 +660,7 @@ final class ShowerFlow: ObservableObject {
         case let .unconfirmed(msg):
             // 没有证据 = 水可能还在流。留在页面让用户重试
             AppNotifications.shared.closeProblem(device: order.device.displayName, snCode: order.snCode)
-            toast = "没能确认设备已关闭，请检查网络后重试"
+            toast = "关闭结果未确认，设备可能仍在出水"
             startTimer()
         case let .failed(msg):
             AppNotifications.shared.closeProblem(device: order.device.displayName, snCode: order.snCode, reason: msg)
@@ -697,8 +697,8 @@ final class ShowerFlow: ObservableObject {
         guard r.waterStopped else {
             // ⚠️ 水可能还在流 —— 留在使用页，让他能重试
             AppNotifications.shared.closeProblem(device: order.device.displayName, snCode: order.snCode,
-                reason: "设备没有响应关闭指令，请靠近设备后重试")
-            toast = "设备没有响应关闭指令，请靠近设备后重试"
+                reason: "关闭未确认，请靠近设备重试")
+            toast = "关闭未确认，请靠近设备重试"
             AppLog.shared.w("蓝牙关阀未确认，保留使用页以便重试")
             startTimer()
             return
@@ -970,7 +970,7 @@ final class ShowerFlow: ObservableObject {
                 : "热水器已关闭，本次无消费"
         } else {
             // nil = 还不知道，不是没花钱
-            toast = "已停止，消费金额稍后可在账单中查看"
+            toast = "已关闭，金额请稍后查看账单"
         }
     }
 
@@ -1271,7 +1271,7 @@ final class ShowerFlow: ObservableObject {
             toast = message
             AppNotifications.shared.closeProblem(device: record.deviceName, snCode: target.snCode, reason: message)
         case .unconfirmed:
-            toast = "没能确认设备已关闭，请检查网络后重试"
+            toast = "关闭结果未确认，设备可能仍在出水"
             AppNotifications.shared.closeProblem(device: record.deviceName, snCode: target.snCode)
         }
         return true

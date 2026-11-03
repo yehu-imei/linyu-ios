@@ -146,7 +146,7 @@ struct MainTabView: View {
         }
         .overlay { flowDialogs }
         .overlay {
-            UserDialogs(scanner: scanner,
+            UserDialogs(scanner: scanner, flow: flow,
                         onRoomSelected: { flow.toast = "已绑定寝室：\($0)" },
                         onUseCodeRedeemed: { flow.toast = "使用码已更新" },
                         onAccountChanged: { flow.toast = $0 })
@@ -299,7 +299,7 @@ struct MainTabView: View {
         } else if s.failed == 0 {
             flow.toast = "补扣成功，再试一次开阀"
         } else if s.ok == 0 {
-            flow.toast = s.firstFailReason ?? "补扣失败，请到「钱包」页重试"
+            flow.toast = s.firstFailReason ?? "补扣失败，请到账单页重试"
         } else {
             flow.toast = "成功 \(s.ok) 笔、失败 \(s.failed) 笔"
         }
@@ -323,7 +323,7 @@ struct MainTabView: View {
         withAnimation(Self.pageAnimation) { tab = 0 }
         settingsVisible = false
         showerMinimized = true
-        flow.toast = "已返回主页，设备仍在运行"
+        flow.toast = "已返回首页，用水仍在继续"
     }
 
     // 用水页返回后可以查看账单和设置，业务提示必须跨页面可见。

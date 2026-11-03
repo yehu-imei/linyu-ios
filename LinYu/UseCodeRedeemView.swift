@@ -30,7 +30,7 @@ struct UseCodeRedeemView: View {
                         Text("获取失败，请重试")
                         Button("重试") { retryToken += 1 }
                     } else if unavailable {
-                        Text(store.useCodeBlockReason ?? "1天只能领取一次使用码")
+                        Text(store.useCodeBlockReason ?? "每天只能领取一次使用码")
                             .font(.system(size: 14)).foregroundStyle(colors.textPrimary)
                     } else {
                         if let current = store.useCode?.useCode, !current.isEmpty {
@@ -45,7 +45,7 @@ struct UseCodeRedeemView: View {
                             VStack(alignment: .leading, spacing: 6) {
                                 HStack(spacing: 4) {
                                     VStack(alignment: .leading, spacing: 2) {
-                                        Text("领取后替换为").font(.system(size: 12))
+                                        Text("新使用码").font(.system(size: 12))
                                         Group {
                                             if candidate.isEmpty {
                                                 Text("— — — — — — — —").foregroundColor(colors.textSecondary)
@@ -68,7 +68,7 @@ struct UseCodeRedeemView: View {
                                     }.disabled(busy || store.useCodeQuotaExhausted)
                                 }
                                 if !candidate.isEmpty {
-                                    Text(seconds == 0 ? "已超时，请重新换一个" : String(format: "请在 %d:%02d 内领取", seconds / 60, seconds % 60))
+                                    Text(seconds == 0 ? "使用码已过期，请重新获取" : String(format: "请在 %d:%02d 内领取", seconds / 60, seconds % 60))
                                         .font(.system(size: 11))
                                         .foregroundStyle(seconds == 0 ? colors.danger : colors.textSecondary)
                                 }

@@ -92,7 +92,7 @@ final class BleSession: NSObject, ObservableObject {
         central = manager
         guard let central else { return false }
         guard central.state == .poweredOn else {
-            setPhase(.failed("蓝牙未开启（\(describe(central.state))）"))
+            setPhase(.failed("蓝牙不可用，请检查蓝牙开关和权限"))
             return false
         }
 
@@ -125,7 +125,7 @@ final class BleSession: NSObject, ObservableObject {
             let work = DispatchWorkItem { [weak self] in
                 guard let self, self.callbackGuard.accepts(p.identifier, generation: generation),
                       self.phase == .connecting || self.phase == .discovering else { return }
-                self.setPhase(.failed("连接超时（\(Int(timeout))s），可能信号太弱，请靠近设备"))
+                self.setPhase(.failed("连接超时，请靠近设备重试"))
                 self.connectContinuation?.resume(returning: false)
                 self.connectContinuation = nil
                 if let p = self.peripheral {
@@ -515,7 +515,7 @@ extension BleSession: CBPeripheralDelegate {
             let services = (peripheral.services ?? []).filter { $0.uuid == Self.serviceUUID }
             self.gattLines.append("发现 \(services.count) 个服务")
             guard !services.isEmpty else {
-                self.setPhase(.failed("连上了但没有任何 GATT 服务"))
+                self.setPhase(.failed("设备不支持当前蓝牙控制方式"))
                 self.connectContinuation?.resume(returning: false)
                 self.connectContinuation = nil
                 return
@@ -593,13 +593,13 @@ extension BleSession: CBPeripheralDelegate {
         guard phase == .discovering || phase == .connecting else { return }
         guard servicesPending <= 0 else { return }
         guard writeChar != nil else {
-            setPhase(.failed("没有找到 FF02 写入特征，这台可能不是水控表"))
+            setPhase(.failed("设备不支持当前蓝牙控制方式"))
             connectContinuation?.resume(returning: false)
             connectContinuation = nil
             return
         }
         guard notifyChar != nil else {
-            setPhase(.failed("没有找到 FF01 通知特征，这台可能不是水控表"))
+            setPhase(.failed("设备不支持当前蓝牙控制方式"))
             connectContinuation?.resume(returning: false)
             connectContinuation = nil
             return

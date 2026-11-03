@@ -7,7 +7,7 @@ final class UserPresentation: ObservableObject {
         case background, log
         var id: String { rawValue }
     }
-    enum Dialog { case phone, password, useCode, room }
+    enum Dialog { case phone, password, useCode, room, logout }
     @Published var page: Page?
     @Published var dialog: Dialog?
 }
@@ -17,6 +17,7 @@ struct UserDialogs: View {
     @EnvironmentObject private var store: AppDataStore
     @Environment(\.appColors) private var colors
     @ObservedObject var scanner: BLEScanner
+    @ObservedObject var flow: ShowerFlow
     let onRoomSelected: (String) -> Void
     var onUseCodeRedeemed: () -> Void = {}
     var onAccountChanged: (String) -> Void = { _ in }
@@ -28,6 +29,25 @@ struct UserDialogs: View {
     }
     var body: some View {
         switch presentation.dialog {
+        case .logout:
+            ConfirmDialogView(
+                title: canLogout ? "确认退出" : "无法退出",
+                message: canLogout ? "确定退出登录？" : "设备使用中，无法退出",
+                confirmTitle: canLogout ? "退出" : "返回",
+                destructive: canLogout,
+                cancelTitle: canLogout ? "取消" : nil,
+                onConfirm: {
+                    if canLogout {
+                        presentation.dialog = nil
+                        flow.reset()
+                        Session.shared.logout()
+                    } else {
+                        flow.toast = "设备使用中，无法退出"
+                        presentation.dialog = nil
+                    }
+                },
+                onDismiss: { presentation.dialog = nil }
+            )
         case .phone:
             ChangePhoneDialog(currentPhone: Session.shared.telephone,
                               onDismiss: { presentation.dialog = nil },
@@ -64,5 +84,8 @@ struct UserDialogs: View {
             }
         case nil: EmptyView()
         }
+    }
+    private var canLogout: Bool {
+        flow.activeOrder == nil && flow.restoredOrders.isEmpty && !flow.controlBusy
     }
 }

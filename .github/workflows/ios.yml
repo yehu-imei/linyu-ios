@@ -119,7 +119,25 @@ jobs:
           test "$(/usr/libexec/PlistBuddy -c 'Print :NSExtension:NSExtensionPointIdentifier' "$EXT/Info.plist")" = "com.apple.widgetkit-extension"
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$EXT/Info.plist")" = "18"
 
-          # 未签名 ipa 的标准结构就是 Payload/<App>.app
+          # Archive 关闭了签名：仅生成 entitlements 文件并不会把共享组写进二进制。
+          # 给 SideStore 保留可读取的权限声明，安装时仍须用户账号重新签名。
+          # 先签扩展，再签宿主；这不是可直接安装的开发者证书签名。
+          codesign --force --sign - --timestamp=none --entitlements WidgetExtension/LinYuWidgets.entitlements "$EXT"
+          codesign --force --sign - --timestamp=none --entitlements LinYu/LinYu.entitlements "$APP"
+          codesign --verify --strict "$EXT"
+          codesign --verify --strict "$APP"
+          codesign --display --entitlements - "$EXT" > build/widget-entitlements.plist
+          codesign --display --entitlements - "$APP" > build/app-entitlements.plist
+          python3 - <<'PY'
+          import plistlib
+          expected = ["group.com.hualala.linyu"]
+          for path in ["build/widget-entitlements.plist", "build/app-entitlements.plist"]:
+              with open(path, "rb") as source:
+                  actual = plistlib.load(source).get("com.apple.security.application-groups")
+              assert actual == expected, f"Shared group missing in {path}"
+          PY
+
+          # 保留原产物文件名；它仍需要 SideStore 重签后安装。
           rm -rf build/Payload build/LinYu-unsigned.ipa
           mkdir -p build/Payload
           cp -R "$APP" build/Payload/

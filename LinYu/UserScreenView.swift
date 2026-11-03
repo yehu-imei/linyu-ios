@@ -23,8 +23,6 @@ struct UserScreenView: View {
     @AppStorage("linyu.darkMode") private var isDark = false
 
     @State private var showSettings = false
-    /// 退出登录确认（对照 Android `MainActivity.showLogoutConfirm`）
-    @State private var showLogoutConfirm = false
     @State private var editMode = false
     /// 主题按钮在屏幕坐标里的位置（揭示动画的原点）
     @State private var themeAnchor: CGRect = .zero
@@ -69,7 +67,7 @@ struct UserScreenView: View {
         .onDisappear { settingsVisible = false }
         .simultaneousGesture(
             DragGesture(minimumDistance: 30).onEnded { value in
-                guard !showLogoutConfirm, presentation.dialog == nil, value.startLocation.x < 24,
+                guard presentation.dialog == nil, value.startLocation.x < 24,
                       value.translation.width > 80, abs(value.translation.height) < 50 else { return }
                 if presentation.page != nil { presentation.page = nil; return }
                 guard showSettings else { return }
@@ -77,21 +75,6 @@ struct UserScreenView: View {
                 editMode = false
             }
         )
-        .alert(flow.restoredOrders.isEmpty && !flow.controlBusy ? "确认退出" : "无法退出", isPresented: $showLogoutConfirm) {
-            if flow.restoredOrders.isEmpty && !flow.controlBusy {
-                Button("退出", role: .destructive) {
-                    guard flow.restoredOrders.isEmpty, !flow.controlBusy else { return }
-                    showSettings = false
-                    flow.reset()
-                    session.logout()
-                }
-                Button("取消", role: .cancel) {}
-            } else {
-                Button("返回", role: .cancel) {}
-            }
-        } message: {
-            Text(flow.restoredOrders.isEmpty && !flow.controlBusy ? "确定退出登录？" : "设备使用中，无法退出")
-        }
     }
 
     // MARK: - 我的
@@ -142,13 +125,14 @@ struct UserScreenView: View {
                 // 对照 Android `UserScreen.kt:409`：点击只是把事件往上抛，
                 // 真正的确认弹窗在容器层（MainActivity）——iOS 这边同理放在本页 overlay
                 Button {
-                    showLogoutConfirm = true
+                    presentation.dialog = .logout
                 } label: {
                     Text("退出登录")
                         .font(.system(size: 15, weight: .medium))
                         .foregroundStyle(colors.danger)
                         .frame(maxWidth: .infinity)
                         .frame(height: 46)
+                        .contentShape(Rectangle())
                         .overlay(
                             RoundedRectangle(cornerRadius: 14, style: .continuous)
                                 .strokeBorder(colors.danger.opacity(0.5), lineWidth: 1)

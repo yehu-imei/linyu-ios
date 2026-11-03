@@ -138,7 +138,7 @@ struct QrScanView: View {
                 guard !Task.isCancelled else { return }
                 if let value = values.first(where: { QrCodeParser.parseSnCode($0) != nil }) { accept(value) }
                 else { errorText = "未识别到设备二维码" }
-            } catch { if !Task.isCancelled { errorText = "图片识别失败，请重试" } }
+            } catch { if !Task.isCancelled { errorText = "图片识别失败，请换张图片" } }
         }
     }
 
@@ -208,12 +208,12 @@ private struct CameraPreview: UIViewRepresentable {
                         if granted {
                             self.configure(in: view)
                         } else {
-                            self.onError("没有相机权限。请到「设置 → 淋浴」里允许相机，或直接从附近设备里选。")
+                            self.onError("请允许相机权限后扫码")
                         }
                     }
                 }
             default:
-                onError("没有相机权限。请到「设置 → 淋浴」里允许相机，或直接从附近设备里选。")
+                onError("请允许相机权限后扫码")
             }
         }
 

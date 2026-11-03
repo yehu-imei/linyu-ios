@@ -51,7 +51,7 @@ enum CloudShower {
                     return .failed("设备已关闭，请稍后重试")
                 }
                 if let expectedOrderNo, !expectedOrderNo.isEmpty, expectedOrderNo != orderNo {
-                    return .failed("设备订单已变化，请刷新设备状态后操作")
+                    return .failed("订单状态已变化，请刷新")
                 }
                 let pre = using.data?.preDeductMoney?.value
                 AppLog.shared.i("设备 \(snCode) 已有进行中订单 \(orderNo)，恢复")
@@ -114,7 +114,7 @@ enum CloudShower {
         }
 
         guard opened else {
-            return .failed("开阀未确认成功，请确认热水器是否已开启")
+            return .failed("开启结果未确认，请检查是否出水，勿重复开启")
         }
 
         AppLog.shared.i("云端开阀成功 orderNo=\(confirmedOrderNo) autoDisCon=\(autoDisCon)s")
@@ -160,9 +160,9 @@ enum CloudShower {
             guard SessionWork.isCurrent(generation) else { return .unconfirmed("登录状态已变化") }
             let running = await orderRunning(snCode: snCode)
             if running == true {
-                return .unconfirmed("关阀请求没发出去，设备可能还在用水")
+                return .unconfirmed("关闭结果未确认，设备可能仍在出水")
             }
-            return .unconfirmed("关阀请求未确认：\(LoginFeedback.message(error))，设备可能仍在用水，请重试")
+            return .unconfirmed("关闭结果未确认，设备可能仍在出水")
         }
 
         if !resp.success {

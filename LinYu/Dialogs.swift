@@ -186,7 +186,7 @@ struct DeviceDetailDialogView: View {
                     DetailRowView(label: "预扣金额", value: MoneyFormat.withSymbol(device.withholdYuan))
                     DetailRowView(label: "状态", value: isActive ? "使用中" : "空闲")
                     if device.needsBluetoothControl {
-                        Text("此设备通过手机蓝牙直连控制：开启后请留在设备旁，走远会断开连接、无法关闭。")
+                        Text("使用期间请保持蓝牙开启并留在设备附近，以便结束用水。")
                             .font(.system(size: 13))
                             .foregroundStyle(colors.textSecondary)
                             .lineSpacing(4)
@@ -332,15 +332,15 @@ struct BleRetryDialogView: View {
 
     var body: some View {
         DialogScrim(onTapOutside: onDismiss) {
-            AlertCard(title: "要用蓝牙方式开启吗？", titleAlign: .center) {
-                Text("「\(deviceName)」无法通过云端开启。\n\n如果这台设备需要手机蓝牙直连（开启时必须待在设备旁边），可以改用蓝牙方式。\n\n不确定的话：用官方「趣智校园」试一下——需要站到设备旁才能开的就是这一类。")
+            AlertCard(title: "尝试蓝牙开启？", titleAlign: .center) {
+                Text("云端开启失败。若设备支持蓝牙控制，请靠近设备后重试。")
                     .font(.system(size: 14))
                     .foregroundStyle(colors.textSecondary)
                     .lineSpacing(6)
                     .frame(maxWidth: .infinity, alignment: .leading)
             } actions: {
                 DialogTextButton(title: "取消", color: colors.accent, action: onDismiss)
-                DialogFilledButton(title: "用蓝牙开启", color: colors.accent, action: onConfirm)
+                DialogFilledButton(title: "蓝牙开启", color: colors.accent, action: onConfirm)
             }
         }
     }
@@ -414,22 +414,22 @@ struct DeductConfirmDialogView: View {
 
     var body: some View {
         DialogScrim(onTapOutside: onDismiss) {
-            AlertCard(title: "确认补扣", titleAlign: .leading) {
+            AlertCard(title: "确认扣款", titleAlign: .leading) {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text(amount.map { MoneyFormat.withSymbol($0) } ?? "金额未知")
+                    Text(amount.map { MoneyFormat.withSymbol($0) } ?? "金额无法确认")
                         .font(.system(size: 28, weight: .bold))
                         .foregroundStyle(colors.textPrimary)
                     Text(detail)
                         .font(.system(size: 13))
                         .foregroundStyle(colors.textSecondary)
-                    Text("将从你的校园卡账户扣款，扣款后不可撤销。")
+                    Text(amount != nil ? "将从校园卡扣除以上金额，是否继续？" : "无法确认扣款金额，请到账单页核对。")
                         .font(.system(size: 12))
                         .foregroundStyle(colors.warning)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             } actions: {
                 DialogTextButton(title: "取消", color: colors.accent, action: onDismiss)
-                DialogFilledButton(title: "确认扣款", color: colors.warning, action: onConfirm)
+                DialogFilledButton(title: "确认扣款", color: colors.warning, enabled: amount != nil, action: onConfirm)
             }
         }
     }

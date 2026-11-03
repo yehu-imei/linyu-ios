@@ -97,7 +97,7 @@ final class AppNotifications: NSObject, ObservableObject, UNUserNotificationCent
         do {
             let allowed = try await center.requestAuthorization(options: [.alert, .sound, .badge])
             await refreshAuthorization()
-            authorizationError = allowed ? nil : "请在系统设置中允许通知"
+            authorizationError = allowed ? nil : "请允许通知权限"
             return allowed
         }
         catch {
@@ -173,7 +173,7 @@ final class AppNotifications: NSObject, ObservableObject, UNUserNotificationCent
         let name = device.count > 14 ? "…" + String(device.suffix(13)) : device
         let content = UNMutableNotificationContent()
         content.title = (reason == nil ? "关阀状态未确认 · " : "关阀失败 · ") + name
-        content.body = reason ?? "网络异常，设备可能仍在用水，请重试"
+        content.body = "关闭结果未确认，设备可能仍在出水，请检查设备后重试"
         content.threadIdentifier = "linyu.finished." + Self.accountKey
         content.userInfo = ["accountKey": Self.accountKey, "kind": NotificationKind.closeProblem.rawValue]
         if Prefs.notifyAlert { content.sound = .default }
@@ -209,7 +209,7 @@ final class AppNotifications: NSObject, ObservableObject, UNUserNotificationCent
         let kind: NotificationKind = occupied ? .occupied : .openFailed
         let name = device.count > 14 ? "…" + String(device.suffix(13)) : device
         content.title = occupied ? "设备占用中" : "开阀失败 · " + name
-        content.body = occupied ? name + "正在被他人使用" : reason
+        content.body = occupied ? name + "正在被他人使用" : LoginFeedback.chineseMessage(reason, fallback: "开启失败，请重试")
         content.userInfo = ["accountKey": Self.accountKey, "kind": kind.rawValue]
         content.threadIdentifier = "linyu.events." + Self.accountKey
         if Prefs.notifyAlert { content.sound = .default }
