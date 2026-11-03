@@ -13,6 +13,7 @@ import WidgetKit
     private var acceptedSnapshot: WidgetSnapshot?
     private var handling = false
     private var lastReload = Date.distantPast
+    private var needsReload = false
     private var lastSnapshot: WidgetSnapshot?
     private var consumed: Set<String> = []
 
@@ -32,6 +33,7 @@ import WidgetKit
         operationMessage = nil
         consumed.removeAll()
         lastSnapshot = nil
+        needsReload = false
         WidgetSharedStore.write(WidgetSnapshot())
         WidgetCenter.shared.reloadAllTimelines()
     }
@@ -106,28 +108,36 @@ import WidgetKit
                 return
             }
             lastSnapshot = next
+            needsReload = true
         }
-        if force || identityChanged || Date().timeIntervalSince(lastReload) > 15 {
+        // 计时由 WidgetKit 的开始时间绘制，不能每 15 秒无变化也重载，干扰切页。
+        if force || identityChanged || (needsReload && Date().timeIntervalSince(lastReload) > 15) {
             lastReload = Date()
+            needsReload = false
             WidgetCenter.shared.reloadAllTimelines()
         }
     }
 
-    /// URL 只承接已经渲染的组件按钮；校验随机身份、账号、设备、订单，防止旧按钮操作新单。
-    func process(store: AppDataStore, flow: ShowerFlow, scanner: BLEScanner) async -> WidgetCommandKind? {
-        guard !handling, !flow.controlBusy, let request = command else { return nil }
-        let snapshot = acceptedSnapshot ?? WidgetSharedStore.read()
-        acceptedSnapshot = nil
+    /// 普通导航同步取走，不能留到开阀完成后才返回首页。
+    func consumeNavigation() -> WidgetCommandKind? {
+        guard let request = command, request.kind.isNavigation else { return nil }
         command = nil
-        guard Session.shared.isLoggedIn else { return .home }
-        // 普通导航不发起水控，不应因共享组未同步而被旧令牌拦截。
-        if request.kind == .home || request.kind == .bills || request.kind == .nearby { return request.kind }
+        acceptedSnapshot = nil
         if request.kind == .device || request.kind == .billDetail {
             guard request.owner == AppNotifications.accountKey else { return .home }
             if request.kind == .device { pendingDeviceSN = request.sn }
             else { pendingBillID = request.billID }
-            return request.kind
         }
+        return request.kind
+    }
+
+    /// URL 只承接已经渲染的组件按钮；校验随机身份、账号、设备、订单，防止旧按钮操作新单。
+    func process(store: AppDataStore, flow: ShowerFlow, scanner: BLEScanner) async -> WidgetCommandKind? {
+        guard !handling, !flow.controlBusy, let request = command, !request.kind.isNavigation else { return nil }
+        let snapshot = acceptedSnapshot ?? WidgetSharedStore.read()
+        acceptedSnapshot = nil
+        command = nil
+        guard Session.shared.isLoggedIn else { return .home }
         guard request.matches(snapshot), request.owner == AppNotifications.accountKey else {
             flow.toast = "组件状态已更新，请刷新后操作"
             sync(store: store, flow: flow, scanner: scanner, force: true)

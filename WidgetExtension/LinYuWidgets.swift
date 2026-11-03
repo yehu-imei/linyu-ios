@@ -27,8 +27,10 @@ struct WidgetPageIntent: AppIntent {
         let started = Date()
         let snapshot = WidgetSharedStore.read()
         var value = WidgetSharedStore.selection(slot, owner: snapshot.owner)
+        let target = min(2, max(0, page))
+        guard value.owner != snapshot.owner || value.tab != target else { return .result() }
         value.owner = snapshot.owner
-        value.tab = min(2, max(0, page))
+        value.tab = target
         WidgetSharedStore.select(value, slot: slot)
         Logger(subsystem: "com.hualala.linyu", category: "Widget").info("切页缓存写入耗时 \(Date().timeIntervalSince(started) * 1000) ms，页面 \(page)")
         // Button(intent:) 完成后系统会刷新当前组件，无需额外重载所有组件。

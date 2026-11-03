@@ -54,6 +54,7 @@ struct RootView: View {
         .environment(\.appColors, colors)
         .environment(\.isDarkMode, isDark)
         .preferredColorScheme(isDark ? .dark : .light)
+        .scrollIndicators(.hidden)
         .tint(colors.accent)
     }
 }

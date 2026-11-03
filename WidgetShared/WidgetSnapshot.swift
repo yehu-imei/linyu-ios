@@ -75,6 +75,14 @@ enum WidgetDisplayPolicy {
 }
 
 enum WidgetCommandKind: String, Codable { case start, stop, refresh, home, bills, nearby, device, billDetail, refreshNearby }
+extension WidgetCommandKind {
+    var isNavigation: Bool {
+        switch self {
+        case .home, .bills, .nearby, .device, .billDetail: return true
+        default: return false
+        }
+    }
+}
 struct WidgetCommand: Equatable, Identifiable {
     let id = UUID()
     let kind: WidgetCommandKind

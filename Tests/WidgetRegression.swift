@@ -87,6 +87,11 @@ import Foundation
         check(WidgetDisplayPolicy.syncedAgo(now, now: now) == "刚刚", "组件刚同步文案中文")
         check(WidgetDisplayPolicy.syncedAgo(now.addingTimeInterval(-120), now: now) == "2 分钟前", "组件分钟文案不受英文系统影响")
         check(WidgetDisplayPolicy.syncedAgo(now.addingTimeInterval(-7200), now: now) == "2 小时前", "组件小时文案中文")
+        check(WidgetCommandKind.home.isNavigation && WidgetCommandKind.device.isNavigation, "首页与详情入口即时消费，不排队水控")
+        check(!WidgetCommandKind.start.isNavigation && !WidgetCommandKind.stop.isNavigation && !WidgetCommandKind.refresh.isNavigation, "水控与刷新保留异步操作校验")
+        check(!ColorContrastPolicy.usesDarkForeground(red: 0.6, green: 0.6, blue: 0.6), "中灰强调色按 Android 线性亮度使用白字")
+        check(ColorContrastPolicy.usesDarkForeground(red: 0.8, green: 0.8, blue: 0.8), "浅色强调色使用深色文字")
+        check(!ColorContrastPolicy.usesDarkForeground(red: 0, green: 0, blue: 0) && ColorContrastPolicy.usesDarkForeground(red: 1, green: 1, blue: 1), "黑白强调色对比正确")
         if failures > 0 { fatalError("\(failures) widget checks failed") }
     }
 }

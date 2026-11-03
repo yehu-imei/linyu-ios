@@ -25,6 +25,7 @@ struct MainTabView: View {
     @StateObject private var kickWatch = KickWatch()
     @ObservedObject private var notifications = AppNotifications.shared
     @State private var handlingNotification = false
+    @State private var handlingWidget = false
     @ObservedObject private var widgets = WidgetBridge.shared
     @Environment(\.scenePhase) private var scenePhase
     /// 进「我的 → 设置」时隐藏底部导航（Android 也是这么做的）
@@ -257,7 +258,28 @@ struct MainTabView: View {
     }
 
     @MainActor private func processWidgetCommand() async {
-        guard scenePhase == .active, let request = widgets.command, !flow.controlBusy else { return }
+        guard scenePhase == .active, let request = widgets.command else { return }
+        // 导航不等待水控锁，也不在 await 后再次覆盖页面。忙碌时只消费旧导航。
+        if request.kind.isNavigation {
+            guard let action = widgets.consumeNavigation() else { return }
+            guard !flow.controlBusy, !handlingWidget else {
+                widgets.pendingDeviceSN = nil
+                widgets.pendingBillID = nil
+                AppLog.shared.i("组件导航已消费，保留当前水控页面")
+                return
+            }
+            settingsVisible = false
+            userPresentation.page = nil
+            userPresentation.dialog = nil
+            showerMinimized = true
+            tab = action == .bills || action == .billDetail ? 1 : 0
+            if action == .nearby || action == .device, !scanner.isScanning { scanner.start() }
+            return
+        }
+        guard !handlingWidget, !flow.controlBusy else { return }
+        handlingWidget = true
+        defer { handlingWidget = false }
+        let originalOrder = flow.activeOrder?.startedAt
         // 先让操作目标与进度可见，再查台账/开关阀，不能等网络结束才退出设置或背景页。
         settingsVisible = false
         userPresentation.page = nil
@@ -268,6 +290,8 @@ struct MainTabView: View {
         flow.centralProvider = { [scanner] in scanner.manager }
         flow.deviceInfoProvider = { [store] sn in store.deviceInfos[sn] }
         guard let action = await widgets.process(store: store, flow: flow, scanner: scanner) else { return }
+        // 刷新期间用户可能已从软件内开启设备，旧刷新不能把使用页最小化。
+        if request.kind != .start, request.kind != .stop, flow.activeOrder?.startedAt != originalOrder { return }
         settingsVisible = false
         userPresentation.page = nil
         userPresentation.dialog = nil
