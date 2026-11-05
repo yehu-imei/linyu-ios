@@ -165,10 +165,10 @@ struct SoftwareUpdateCard: View {
             }.buttonStyle(InstantButtonStyle())
             if expandedID == release.id {
                 Text(release.text).font(.system(size: 12)).foregroundStyle(colors.textSecondary)
+                    .lineSpacing(3)
                     .textSelection(.enabled).fixedSize(horizontal: false, vertical: true).padding(.bottom, 6)
                 Text(release.date).font(.system(size: 11))
                     .foregroundStyle(colors.textSecondary.opacity(0.7)).padding(.bottom, 6)
-                Divider().overlay(colors.border)
             }
         }
     }

@@ -23,6 +23,9 @@ import Foundation
         check(UserReleaseNotes.merge(preferred: UserReleaseNotes.parse(sample), fallback: notes).count == 15, "新增远程版本不丢失旧版本")
         let crlf = doc.replacingOccurrences(of: "\n", with: "\r\n")
         check(UserReleaseNotes.parse(crlf) == notes, "Windows 换行不影响日志读取")
+        let legacy = UserReleaseNote(version: "v3.1.0", date: "2026-09-30", items: ["支持 Android 8.0。 ", "消费 0.025 元。", "区分“结算中”。金额准确。"])
+        check(legacy.text == "• 支持 Android 8.0\n• 消费 0.025 元\n• 区分“结算中”。金额准确", "旧缓存只去条目末尾句号，保留内部标点和小数点")
+        check(notes.flatMap(\.items).allSatisfy { !$0.hasSuffix("。") }, "内置用户日志条目不带结尾句号")
         if failures > 0 { fatalError("\(failures) release note checks failed") }
     }
 }

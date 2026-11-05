@@ -5,7 +5,11 @@ struct UserReleaseNote: Equatable, Identifiable {
     var date: String
     var items: [String]
     var id: String { version }
-    var text: String { items.map { "• " + $0 }.joined(separator: "\n") }
+    // 兼容已落盘的旧文档，只去掉条目末尾句号，不动版本号/小数点。
+    var text: String {
+        items.map { "• " + $0.trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "。+$", with: "", options: .regularExpression) }.joined(separator: "\n")
+    }
 }
 
 /// 专用用户日志格式。只识别版本、日期及显式平台标签，不按“新增/修复”等关键词截取。
