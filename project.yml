@@ -21,6 +21,8 @@ targets:
     type: application
     platform: iOS
     sources:
+      - path: docs/APP_CHANGELOG.md
+        buildPhase: resources
       - path: WidgetShared
       - path: WidgetExtension/LinYuWidgets.swift
       - path: LinYu
@@ -37,6 +39,7 @@ targets:
         CFBundleDisplayName: 淋浴
         CFBundleShortVersionString: "3.1.0"
         CFBundleVersion: "18"
+        LinYuSourceRevision: "$(LINYU_SOURCE_REVISION)"
         CFBundleURLTypes:
           - CFBundleURLName: com.hualala.linyu.widget
             CFBundleURLSchemes:

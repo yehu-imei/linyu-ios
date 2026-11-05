@@ -10,6 +10,12 @@ enum CoreLogicRegression {
     static func run(check: (Bool, String) -> Void) {
         settleProbe(check: check)
         activeOrderStore(check: check)
+        let calendar = Calendar(identifier: .gregorian)
+        let today = calendar.date(from: DateComponents(year: 2026, month: 11, day: 5, hour: 12))!
+        let month = SpendingAnalytics.summarize(bills: [], range: .thisMonth, today: today)
+        check(month.points.count == 5, "本月与安卓一致：1日到今天，不包含未来日期")
+        check(month.points.allSatisfy { $0.amount == 0 && $0.count == 0 }, "本月无消费日补零")
+        check(SpendingAnalytics.summarize(bills: [], range: .last7, today: today).points.count == 7, "近七天包含今天并跨月补齐")
     }
 
     // MARK: - 结算金额解析

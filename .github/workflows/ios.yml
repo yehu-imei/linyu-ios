@@ -56,9 +56,11 @@ jobs:
             -o "$RUNNER_TEMP/linyu-display-tests"
           "$RUNNER_TEMP/linyu-display-tests"
           swiftc -swift-version 5 -parse-as-library \
-            WidgetShared/WidgetSnapshot.swift LinYu/ColorContrastPolicy.swift Tests/WidgetRegression.swift \
+            WidgetShared/WidgetSnapshot.swift WidgetShared/ConsumptionCachePolicy.swift LinYu/ColorContrastPolicy.swift Tests/WidgetRegression.swift \
             -o "$RUNNER_TEMP/linyu-widget-tests"
           "$RUNNER_TEMP/linyu-widget-tests"
+          swiftc -swift-version 5 -parse-as-library LinYu/UserReleaseNotes.swift Tests/ReleaseNotesRegression.swift -o "$RUNNER_TEMP/linyu-release-tests"
+          "$RUNNER_TEMP/linyu-release-tests"
 
       - name: 生成 Xcode 工程
         run: xcodegen generate
@@ -73,9 +75,11 @@ jobs:
             -destination 'generic/platform=iOS' \
             -archivePath build/LinYu.xcarchive \
             CODE_SIGN_IDENTITY="" \
+            LINYU_SOURCE_REVISION="$GITHUB_SHA" \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO \
             ENABLE_BITCODE=NO
+          test -s build/LinYu.xcarchive/Products/Applications/LinYu.app/APP_CHANGELOG.md
 
       - name: 组件离线布局截图
         run: |

@@ -14,6 +14,7 @@ import WidgetKit
     private var handling = false
     private var lastReload = Date.distantPast
     private var needsReload = false
+    private var reloadTask: Task<Void, Never>?
     private var lastSnapshot: WidgetSnapshot?
     private var consumed: Set<String> = []
 
@@ -34,6 +35,8 @@ import WidgetKit
         consumed.removeAll()
         lastSnapshot = nil
         needsReload = false
+        reloadTask?.cancel()
+        reloadTask = nil
         WidgetSharedStore.write(WidgetSnapshot())
         WidgetCenter.shared.reloadAllTimelines()
     }
@@ -51,24 +54,41 @@ import WidgetKit
         let billSnapshots = store.bills.map { WidgetBill(name: $0.displayNamePart, emoji: $0.deviceEmoji,
             time: $0.consumeDate ?? "", money: $0.yuan.map { "-" + MoneyFormat.withSymbol($0) } ?? "—",
             id: $0.id, deviceSN: $0.deviceSnCode, detail: $0.deviceTypeLabel, amount: $0.yuan) }
+        // 冷启动台账尚未补齐时保留同账号的展示缓存；运行状态仍以当前订单台账为准。
         var infos: [String: WidgetDevice] = [:]
-        for (address, info) in store.deviceInfos.sorted(by: { $0.key < $1.key }) {
+        if previous.owner == next.owner {
+            for var item in previous.devices {
+                item.running = false; item.orderNo = ""; item.startedAt = 0
+                infos[item.id] = item
+            }
+        }
+        // 使用中的订单本身就持有完整台账，发布状态不能依赖附近扫描。
+        var deviceInfos = store.deviceInfos
+        if let active = flow.activeOrder { deviceInfos[active.snCode] = active.device }
+        for (address, info) in deviceInfos.sorted(by: { $0.key < $1.key }) {
             let sn = info.snCode.flatMap { $0.isEmpty ? nil : $0 } ?? address
-            var item = infos[sn] ?? WidgetDevice(id: sn, name: info.displayName, detail: info.typeLabel, emoji: info.typeEmoji,
-                selectable: DeviceInfo.inSameRoom(boundKey: Prefs.boundRoom, deviceName: info.deviceName ?? ""))
+            var item = infos[sn] ?? WidgetDevice(id: sn, name: info.displayName, detail: info.typeLabel, emoji: info.typeEmoji)
+            item.name = info.displayName; item.detail = info.typeLabel; item.emoji = info.typeEmoji
+            item.selectable = DeviceInfo.inSameRoom(boundKey: Prefs.boundRoom, deviceName: info.deviceName ?? "")
             item.aliases = Array(Set((item.aliases ?? []) + [address, sn])).sorted()
             infos[sn] = item
         }
         if let canonical = infos.values.first(where: { $0.id == next.lastDevice || ($0.aliases ?? []).contains(next.lastDevice) }) {
             next.lastDevice = canonical.id
         }
-        if !next.lastDevice.isEmpty, infos[next.lastDevice] == nil {
-            infos[Prefs.lastDeviceSnCode] = WidgetDevice(id: Prefs.lastDeviceSnCode, name: Prefs.lastDeviceName,
+        if !next.lastDevice.isEmpty, deviceInfos.values.allSatisfy({ $0.snCode != next.lastDevice }) {
+            // 覆盖旧快照的筛选结果：即使没有扫描到，持久化的上次设备也可独立展示。
+            var last = infos[next.lastDevice] ?? WidgetDevice(id: next.lastDevice, name: Prefs.lastDeviceName,
                 detail: Prefs.lastDeviceTypeName, emoji: Prefs.lastDeviceEmoji,
                 selectable: DeviceInfo.inSameRoom(boundKey: Prefs.boundRoom, deviceName: Prefs.lastDeviceRawName))
+            last.name = Prefs.lastDeviceName; last.detail = Prefs.lastDeviceTypeName; last.emoji = Prefs.lastDeviceEmoji
+            last.selectable = DeviceInfo.inSameRoom(boundKey: Prefs.boundRoom, deviceName: Prefs.lastDeviceRawName)
+            last.aliases = Array(Set((last.aliases ?? []) + [Prefs.lastDeviceMac, Prefs.lastDeviceSnCode].filter { !$0.isEmpty })).sorted()
+            infos[next.lastDevice] = last
         }
         for order in orders where infos[order.snCode] == nil {
-            infos[order.snCode] = WidgetDevice(id: order.snCode, name: order.deviceName, detail: "使用中的设备", emoji: order.deviceEmoji)
+            infos[order.snCode] = WidgetDevice(id: order.snCode, name: order.deviceName, detail: "使用中的设备", emoji: order.deviceEmoji,
+                aliases: [order.deviceMac].filter { !$0.isEmpty })
         }
         for item in scanner.devices.sorted(by: { $0.rssi > $1.rssi }) {
             guard let address = item.parsedSnCode else { continue }
@@ -98,7 +118,8 @@ import WidgetKit
         next.devices = infos.values.sorted { $0.id < $1.id }
         next.bills = Array(billSnapshots.prefix(5))
         let identityChanged = previous.controlIdentity != next.controlIdentity
-        next.token = identityChanged ? UUID().uuidString : previous.token
+        // 登录会话级身份；别的设备变化/普通刷新不能作废上次设备按钮。
+        next.token = previous.owner == next.owner ? previous.token : UUID().uuidString
         // 不为每秒计时生成新快照，WidgetKit 使用开始时间自行渲染时间文本。
         next.date = previous.date
         if next != previous {
@@ -109,12 +130,25 @@ import WidgetKit
             }
             lastSnapshot = next
             needsReload = true
+            if identityChanged {
+                AppLog.shared.i("组件快照：设备=\(next.devices.count)，使用中=\(next.devices.filter(\.running).count)，上次=\(next.lastDevice)，可展示=\(next.displayedDevice("") != nil)，附近=\(next.nearbyIDs.count)")
+            }
         }
-        // 计时由 WidgetKit 的开始时间绘制，不能每 15 秒无变化也重载，干扰切页。
-        if force || identityChanged || (needsReload && Date().timeIntervalSince(lastReload) > 15) {
+        // 合并短时间内的扫描/资料更新，但保证最后一次变更一定会发布。
+        if force || identityChanged || (needsReload && Date().timeIntervalSince(lastReload) > 2) {
+            reloadTask?.cancel(); reloadTask = nil
             lastReload = Date()
             needsReload = false
             WidgetCenter.shared.reloadAllTimelines()
+        } else if needsReload, reloadTask == nil {
+            reloadTask = Task { [weak self] in
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                guard !Task.isCancelled, let self else { return }
+                self.reloadTask = nil
+                guard self.needsReload else { return }
+                self.needsReload = false; self.lastReload = Date()
+                WidgetCenter.shared.reloadAllTimelines()
+            }
         }
     }
 
@@ -154,20 +188,13 @@ import WidgetKit
             handling = false
             operationMessage = nil
             AppLog.shared.i("组件操作结束：\(request.kind.rawValue)，当前设备 \(flow.activeOrder?.snCode ?? "无")")
-            if SessionWork.isCurrent(generation) {
-                var updated = WidgetSharedStore.read()
-                updated.token = UUID().uuidString
-                WidgetSharedStore.write(updated)
-                lastSnapshot = updated
-                consumed.removeAll()
-            }
+            consumed.remove(actionID)
             sync(store: store, flow: flow, scanner: scanner, force: true)
         }
         if request.kind == .refresh || request.kind == .refreshNearby {
             if request.kind == .refreshNearby { scanner.start() }
             await flow.reconcileOnResume()
             await store.reload()
-            flow.toast = "已刷新"
             return request.kind == .refreshNearby ? .nearby : .home
         }
         do {
@@ -175,9 +202,12 @@ import WidgetKit
             guard SessionWork.isCurrent(generation) else { return nil }
             await store.putDeviceInfo(info, sn: request.sn)
             if request.kind == .start {
-                guard ActiveOrderStore.find(request.sn) == nil,
-                      DeviceInfo.inSameRoom(boundKey: Prefs.boundRoom, deviceName: info.deviceName ?? "") else {
+                guard DeviceInfo.inSameRoom(boundKey: Prefs.boundRoom, deviceName: info.deviceName ?? "") else {
                     flow.toast = "设备状态已变化，请刷新"; return .home
+                }
+                if let record = ActiveOrderStore.find(request.sn) {
+                    await flow.resume(record: record)
+                    return .start
                 }
             }
             let needsBLE = info.needsBluetoothControl || Prefs.isBleDevice(request.sn)

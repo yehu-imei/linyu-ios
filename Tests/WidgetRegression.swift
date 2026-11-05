@@ -27,7 +27,10 @@ import Foundation
         snapshot.devices[1].orderNo = "newOrder"
         check(!stop.matches(snapshot), "旧组件不能关闭同设备新订单")
         snapshot.devices[0].running = true
-        check(!start.matches(snapshot), "旧开阀按钮不能操作已运行的设备")
+        check(start.matches(snapshot), "旧开启入口允许进入同设备已有订单，由主程序恢复而非重复开阀")
+        snapshot.devices[0].occupied = true
+        check(!start.matches(snapshot), "他人占用的设备不能通过旧开启入口使用")
+        snapshot.devices[0].occupied = false
         snapshot.devices[0].running = false
         snapshot.devices[0].selectable = false
         check(!start.matches(snapshot), "寝室筛选也校验实际开阀入口")
@@ -45,9 +48,30 @@ import Foundation
         snapshot.balance = "¥ 5.00"
         snapshot.devices[0].rssi = -65
         check(before == snapshot.controlIdentity, "余额和信号刷新不使控制身份失效")
+        let stableStart = WidgetCommand(url: WidgetCommand.url(.start, snapshot: snapshot, device: snapshot.devices[0]))!
+        snapshot.devices[1].orderNo = "unrelated-order"
+        check(stableStart.matches(snapshot), "别的设备订单变化不作废上次设备开启入口")
+        snapshot.bills = []
+        check(stableStart.matches(snapshot), "账单刷新不作废云端上次设备入口")
         snapshot.devices[0].startedAt = 456
         check(before != snapshot.controlIdentity, "新会话时间使旧控制身份失效")
         check(snapshot.selected("")?.id == "A", "默认选中上次设备")
+        var away = WidgetSnapshot()
+        away.owner = "school:account"; away.lastDevice = "cloud"
+        away.devices = [WidgetDevice(id: "cloud", name: "320房", detail: "热水器", emoji: "🚿", running: true, orderNo: "cloud-order", startedAt: 123, selectable: false)]
+        check(away.nearbyIDs.isEmpty && away.displayedDevice("old-selection")?.id == "cloud", "不在寝室且旧选项失效时，云端使用状态不依赖附近设备")
+        check(away.displayedDevice("old-selection")?.running == true, "正在用水优先展示，不被旧筛选隐藏")
+        let awayStop = WidgetCommand(url: WidgetCommand.url(.stop, snapshot: away, device: away.displayedDevice("old-selection")))!
+        check(awayStop.matches(away) && awayStop.sn == "cloud", "离开寝室时停止入口仍绑定真实订单")
+        away.devices[0].running = false; away.devices[0].selectable = true
+        check(away.displayedDevice("old-selection")?.id == "cloud", "关闭后仍显示持久化的上次设备")
+        check(away.selected("old-selection") == nil, "展示回退不让旧指定设备链接串台")
+        away.devices[0].selectable = false
+        check(away.displayedDevice("old-selection") == nil, "空闲跨寝室设备仍遵守筛选")
+        away.devices.append(WidgetDevice(id: "B", name: "321房", detail: "热水器", emoji: "🚿", running: true))
+        check(away.displayedDevice("missing")?.id == "B", "上次设备不可见时保留唯一进行中订单入口")
+        away.devices.append(WidgetDevice(id: "C", name: "322房", detail: "热水器", emoji: "🚿", running: true))
+        check(away.displayedDevice("missing") == nil, "多个未选中订单不猜测控制目标")
         let detail = WidgetCommand(url: WidgetCommand.url(.billDetail, snapshot: snapshot, device: nil, billID: "bill/123 中文"))!
         check(detail.kind == .billDetail && detail.billID == "bill/123 中文", "具体账单点击保留完整账单身份")
         let deviceLink = WidgetCommand(url: WidgetCommand.url(.device, snapshot: snapshot, device: snapshot.devices[0]))!
@@ -92,6 +116,10 @@ import Foundation
         check(!ColorContrastPolicy.usesDarkForeground(red: 0.6, green: 0.6, blue: 0.6), "中灰强调色按 Android 线性亮度使用白字")
         check(ColorContrastPolicy.usesDarkForeground(red: 0.8, green: 0.8, blue: 0.8), "浅色强调色使用深色文字")
         check(!ColorContrastPolicy.usesDarkForeground(red: 0, green: 0, blue: 0) && ColorContrastPolicy.usesDarkForeground(red: 1, green: 1, blue: 1), "黑白强调色对比正确")
+        check(ConsumptionCachePolicy.shouldUpdate(sameDevice: true, amount: 1.84, billTime: 200, cachedTime: 100), "新账单更新上次设备消费")
+        check(!ConsumptionCachePolicy.shouldUpdate(sameDevice: true, amount: 0.5, billTime: 100, cachedTime: 200), "旧账单不覆盖刚结算金额")
+        check(!ConsumptionCachePolicy.shouldUpdate(sameDevice: false, amount: 1.84, billTime: 200, cachedTime: 100), "不同设备账单不串消费")
+        check(!ConsumptionCachePolicy.shouldUpdate(sameDevice: true, amount: 0, billTime: 200, cachedTime: 100), "未结算零金额不抹掉历史消费")
         if failures > 0 { fatalError("\(failures) widget checks failed") }
     }
 }

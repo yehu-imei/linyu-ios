@@ -59,11 +59,11 @@ struct WidgetOpenIntent: AppIntent {
     init(_ url: URL) { destination = url.absoluteString }
     @MainActor
     func perform() async throws -> some IntentResult {
-        // 前台 intent 只负责路由，不直接投递水控。由打开 URL 的可见场景接手。
+        // 小型组件不支持多个 Link。只投递路由，水控仍由活跃场景处理。
+        // 不再对自己 UIApplication.open：会产生第二次唤起，且热启动不保证回调。
         #if !LINYU_WIDGET_EXTENSION
         if let url = URL(string: destination), WidgetCommand(url: url) != nil {
-            let opened = await UIApplication.shared.open(url)
-            AppLog.shared.i("组件唤起操作页面：\(opened ? "成功" : "失败")")
+            WidgetBridge.shared.receive(url)
         }
         #endif
         return .result()
@@ -144,10 +144,17 @@ struct LinYuWidgetView: View {
     var familyOverride: WidgetFamily? = nil
     private var family: WidgetFamily { familyOverride ?? systemFamily }
     private var snapshot: WidgetSnapshot { entry.snapshot }
-    private var device: WidgetDevice? { snapshot.selected(entry.selection.device) }
+    private var device: WidgetDevice? { snapshot.displayedDevice(entry.selection.device) }
     private var staleBusy: Bool { snapshot.busy && entry.date.timeIntervalSince(snapshot.date) > 30 }
     private var stateColor: Color { device?.running == true ? Color(red: 0.376, green: 0.647, blue: 0.98) : device?.occupied == true ? .orange : Color(red: 0.29, green: 0.87, blue: 0.50) }
     private func url(_ kind: WidgetCommandKind) -> URL { WidgetCommand.url(kind, snapshot: snapshot, device: device) }
+    @ViewBuilder private func destination<Content: View>(_ target: URL, @ViewBuilder label: () -> Content) -> some View {
+        if family == .systemSmall {
+            Button(intent: WidgetOpenIntent(target), label: label)
+        } else {
+            Link(destination: target, label: label)
+        }
+    }
     private var action: WidgetCommandKind {
         if staleBusy { return .refresh }
         if snapshot.owner.isEmpty { return .home }
@@ -197,7 +204,7 @@ struct LinYuWidgetView: View {
         }
     }
     private var readout: some View {
-        Button(intent: WidgetOpenIntent(url(device?.running == true ? .stop : .bills))) {
+        destination(url(device?.running == true ? .stop : .bills)) {
           VStack(spacing: 5) {
             if staleBusy { Text("状态未知，请刷新").multilineTextAlignment(.center) }
             else if let message = snapshot.message { Text(message).multilineTextAlignment(.center).lineLimit(3) }
@@ -215,7 +222,7 @@ struct LinYuWidgetView: View {
         }.disabled(snapshot.busy && !staleBusy)
     }
     private var power: some View {
-        Button(intent: WidgetOpenIntent(url(action))) {
+        destination(url(action)) {
             AndroidWidgetGlyph(kind: device?.running == true ? "stop" : "power").frame(width: 24, height: 24)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .modifier(Glass(radius: 12, stopping: device?.running == true))
@@ -266,14 +273,14 @@ struct LinYuWidgetView: View {
                     Text("●中").foregroundStyle(.orange)
                     Text("●弱").foregroundStyle(.red)
                 }.fixedSize()
-                Button(intent: WidgetOpenIntent(url(.refreshNearby))) { Image(systemName: "arrow.clockwise").frame(width: 22, height: 22) }
+                destination(url(.refreshNearby)) { Image(systemName: "arrow.clockwise").frame(width: 22, height: 22) }
             }
             .font(.system(size: 8))
             let devices = snapshot.nearbyIDs.compactMap { sn in snapshot.devices.first { $0.id == sn && ($0.selectable || $0.running) } }
             if devices.isEmpty { Text("未扫描到附近设备").foregroundStyle(.white.opacity(0.6)); Spacer(minLength: 0) }
             ForEach(Array(devices.prefix(2))) { item in
                 HStack(spacing: 6) {
-                  Button(intent: WidgetOpenIntent(WidgetCommand.url(.device, snapshot: snapshot, device: item))) {
+                  destination(WidgetCommand.url(.device, snapshot: snapshot, device: item)) {
                    HStack(spacing: 6) {
                     Text(item.emoji).frame(width: 25, height: 25).background(.white.opacity(0.08), in: Circle()).overlay(Circle().strokeBorder(.white.opacity(0.12), lineWidth: 1))
                     VStack(alignment: .leading, spacing: 2) {
@@ -294,7 +301,7 @@ struct LinYuWidgetView: View {
     }
     private var bills: some View {
         VStack(alignment: .leading, spacing: 7) {
-            Button(intent: WidgetOpenIntent(url(.bills))) {
+            destination(url(.bills)) {
               HStack {
                 VStack(alignment: .leading, spacing: 2) { Text(snapshot.balanceTitle).font(.system(size: 9)).foregroundStyle(.white.opacity(0.65)); HStack(spacing: 5) { AndroidWidgetGlyph(kind: "card").frame(width: 14, height: 14); Text(snapshot.balance).font(.system(size: 19, weight: .semibold)).lineLimit(1).minimumScaleFactor(0.6) } }
                 Spacer(minLength: 0)
@@ -304,7 +311,7 @@ struct LinYuWidgetView: View {
             Text("最近消费").font(.system(size: 10)).foregroundStyle(.white.opacity(0.8))
             if snapshot.bills.isEmpty { Text("在 App 里刷新账单").foregroundStyle(.white.opacity(0.6)) }
             ForEach(Array(snapshot.bills.prefix(2).enumerated()), id: \.offset) { _, bill in
-              Button(intent: WidgetOpenIntent(WidgetCommand.url(.billDetail, snapshot: snapshot, device: nil, billID: bill.id ?? ""))) {
+              destination(WidgetCommand.url(.billDetail, snapshot: snapshot, device: nil, billID: bill.id ?? "")) {
                 HStack(spacing: 5) {
                     Text(bill.emoji).frame(width: 25, height: 25).background(.white.opacity(0.08), in: Circle()).overlay(Circle().strokeBorder(.white.opacity(0.12), lineWidth: 1))
                     VStack(alignment: .leading, spacing: 2) {

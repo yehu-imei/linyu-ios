@@ -168,6 +168,7 @@ final class AppLog: ObservableObject {
         # LinYu iOS 运行日志
         导出时间: \(dfFull.string(from: Date()))
         App 版本: \(version) (\(build))
+        源码版本: \(Bundle.main.object(forInfoDictionaryKey: "LinYuSourceRevision") as? String ?? "未知")
         设备: \(UIDevice.modelIdentifier) / \(UIDevice.osName) \(UIDevice.osVersion)
         登录: \(Session.shared.isLoggedIn ? "是（projectId=\(Session.shared.projectId)）" : "否")
 

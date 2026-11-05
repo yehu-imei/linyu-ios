@@ -45,6 +45,7 @@ struct AlertCard<Content: View, Actions: View>: View {
     var contentSpacing: CGFloat = 16
     var actionSpacing: CGFloat = 20
     var cardPadding: CGFloat = 24
+    var maxWidth: CGFloat = 340
     @ViewBuilder let content: Content
     @ViewBuilder let actions: Actions
 
@@ -80,7 +81,7 @@ struct AlertCard<Content: View, Actions: View>: View {
             .padding(.top, actionSpacing)
         }
         .padding(cardPadding)
-        .frame(maxWidth: 340)
+        .frame(maxWidth: maxWidth)
         .background(colors.solidSurface)
         .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
         .shadow(color: .black.opacity(0.12), radius: 24, y: 10)
@@ -460,7 +461,8 @@ struct ConfirmDialogView: View {
                       cornerRadius: compact ? 24 : 28,
                       contentSpacing: compact ? 10 : 16,
                       actionSpacing: compact ? 10 : 20,
-                      cardPadding: compact ? 20 : 24) {
+                      cardPadding: compact ? 20 : 24,
+                      maxWidth: compact ? 290 : 340) {
                 Text(message)
                     .font(.system(size: 14))
                     .foregroundStyle(colors.textSecondary)

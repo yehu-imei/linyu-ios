@@ -162,9 +162,11 @@ enum Prefs {
     }
 
     /// 记一笔消费。金额为 0 时不动已有记录，避免「本次无消费」把历史值抹掉。
-    static func recordConsume(_ snCode: String, amount: Double) {
+    static func consumeRecordedAt(_ snCode: String) -> Double { d.double(forKey: "consume_time_\(snCode)") }
+    static func recordConsume(_ snCode: String, amount: Double, atMs: Double = Date().timeIntervalSince1970 * 1000) {
         guard amount > 0, !snCode.isEmpty else { return }
         d.set(amount, forKey: "consume_\(snCode)")
+        d.set(atMs, forKey: "consume_time_\(snCode)")
         d.set(Date().timeIntervalSince1970 * 1000, forKey: "lastConsumeTime")
     }
 

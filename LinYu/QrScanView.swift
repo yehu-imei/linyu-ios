@@ -43,22 +43,27 @@ struct QrScanView: View {
     @State private var torch = false
     @State private var photo: PhotosPickerItem?
     @State private var readingPhoto = false
+    @State private var cameraStatus = AVCaptureDevice.authorizationStatus(for: .video)
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
 
-            CameraPreview(
+            if cameraStatus == .authorized {
+              CameraPreview(
                 torch: torch,
                 onCode: accept,
                 onError: { msg in
-                    errorText = msg
+                    DispatchQueue.main.async { errorText = msg }
                 }
             )
             .ignoresSafeArea()
+            }
 
             // 取景框
-            GeometryReader { geo in
+            if cameraStatus == .authorized {
+              GeometryReader { geo in
                 let side = min(geo.size.width, geo.size.height) * 0.66
                 RoundedRectangle(cornerRadius: 24, style: .continuous)
                     .strokeBorder(Color.white.opacity(0.9), lineWidth: 3)
@@ -66,6 +71,21 @@ struct QrScanView: View {
                     .position(x: geo.size.width / 2, y: geo.size.height / 2)
             }
             .ignoresSafeArea()
+            } else {
+                VStack(spacing: 14) {
+                    Image(systemName: "camera.fill").font(.system(size: 36))
+                    Text("需要相机权限").font(.headline)
+                    Text(cameraStatus == .restricted ? "相机访问受限，请检查系统限制" : "请允许相机权限后扫码")
+                        .font(.system(size: 14)).multilineTextAlignment(.center)
+                    if cameraStatus == .notDetermined {
+                        Button("授予权限") { Task { await refreshCameraPermission() } }
+                    } else if cameraStatus == .denied {
+                        Button("去设置") {
+                            if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
+                        }
+                    }
+                }.foregroundStyle(.white).tint(.white).padding(24)
+            }
 
             VStack {
                 HStack {
@@ -90,7 +110,7 @@ struct QrScanView: View {
                     PhotosPicker(selection: $photo, matching: .images) {
                         Label("从相册选择", systemImage: "photo")
                     }.disabled(readingPhoto)
-                    if AVCaptureDevice.default(for: .video)?.hasTorch == true {
+                    if cameraStatus == .authorized, AVCaptureDevice.default(for: .video)?.hasTorch == true {
                         Button { torch.toggle() } label: {
                             Label(torch ? "关闭手电筒" : "打开手电筒", systemImage: torch ? "flashlight.on.fill" : "flashlight.off.fill")
                         }
@@ -109,7 +129,7 @@ struct QrScanView: View {
                                 if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
                             }
                         }
-                    } else {
+                    } else if cameraStatus == .authorized {
                         Text("对准热水器上的二维码")
                             .font(.system(size: 15, weight: .medium))
                             .foregroundStyle(.white)
@@ -122,6 +142,10 @@ struct QrScanView: View {
             }
         }
         .preferredColorScheme(.dark)
+        .task { await refreshCameraPermission() }
+        .onChange(of: scenePhase) { phase in
+            if phase == .active { Task { await refreshCameraPermission() } }
+        }
         .onDisappear { torch = false }
         .task(id: photo) {
             guard let photo else { return }
@@ -140,6 +164,16 @@ struct QrScanView: View {
                 else { errorText = "未识别到设备二维码" }
             } catch { if !Task.isCancelled { errorText = "图片识别失败，请换张图片" } }
         }
+    }
+
+    @MainActor private func refreshCameraPermission() async {
+        if AVCaptureDevice.authorizationStatus(for: .video) == .notDetermined {
+            _ = await AVCaptureDevice.requestAccess(for: .video)
+        }
+        guard !Task.isCancelled else { return }
+        cameraStatus = AVCaptureDevice.authorizationStatus(for: .video)
+        if cameraStatus == .authorized { errorText = nil }
+        else { torch = false }
     }
 
     private func accept(_ raw: String) {
