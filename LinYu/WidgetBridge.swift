@@ -17,15 +17,20 @@ import WidgetKit
     private var reloadTask: Task<Void, Never>?
     private var lastSnapshot: WidgetSnapshot?
     private var consumed: Set<String> = []
+    private var delivery = WidgetDeliveryPolicy()
 
     func receive(_ url: URL) {
         guard let request = WidgetCommand(url: url) else { return }
         AppLog.shared.i("收到组件入口：\(request.kind.rawValue)，目标 \(request.sn)")
-        guard command == nil, !handling else { return }
+        guard delivery.accept(request, pending: command, handling: handling) else {
+            AppLog.shared.i("忽略重复或忙碌中的组件入口：\(request.kind.rawValue)")
+            return
+        }
         // 在接到点击时保留身份；回前台刷新台账不能把已受理动作变成“旧按钮”。
         acceptedSnapshot = WidgetSharedStore.read()
         command = request
     }
+    func enteredBackground() { delivery.enteredBackground() }
     func clear() {
         command = nil
         acceptedSnapshot = nil
@@ -33,6 +38,7 @@ import WidgetKit
         pendingBillID = nil
         operationMessage = nil
         consumed.removeAll()
+        delivery = WidgetDeliveryPolicy()
         lastSnapshot = nil
         needsReload = false
         reloadTask?.cancel()

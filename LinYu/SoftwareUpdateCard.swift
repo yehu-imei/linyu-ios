@@ -10,14 +10,23 @@ private final class SoftwareReleaseStore: ObservableObject {
     @Published private(set) var checked = false
     @Published private(set) var failed = false
     private var checkTask: Task<Void, Never>?
+    private var notesTask: Task<Void, Never>?
+    private var notesRefresh = ReleaseNotesRefreshPolicy()
     private static let notesCacheKey = "userReleaseNotes.v1"
 
     private init() {
-        let cached = UserReleaseNotes.parse(UserDefaults.standard.string(forKey: Self.notesCacheKey) ?? "")
-        notes = UserReleaseNotes.merge(preferred: cached, fallback: UserReleaseNotes.bundled)
+        notes = UserReleaseNotes.local(document: UserDefaults.standard.string(forKey: Self.notesCacheKey) ?? "",
+                                      bundled: UserReleaseNotes.bundled)
     }
 
     func check(force: Bool = false) async {
+        // 版本结果可以复用，但每次进入卡片仍应独立检查日志，失败也能重试。
+        async let notesFetch: Void = refreshNotes(force: force)
+        await checkVersion(force: force)
+        await notesFetch
+    }
+
+    private func checkVersion(force: Bool) async {
         if let checkTask { await checkTask.value; return }
         guard force || !checked else { return }
         let task = Task { @MainActor in
@@ -32,7 +41,6 @@ private final class SoftwareReleaseStore: ObservableObject {
         checking = true
         failed = false
         defer { checking = false }
-        async let notesFetch: Void = fetchNotes()
         do {
             let url = URL(string: "https://api.github.com/repos/yehu-imei/linyu/releases?per_page=30")!
             var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 20)
@@ -53,23 +61,27 @@ private final class SoftwareReleaseStore: ObservableObject {
             failed = true
             AppLog.shared.w("检查更新失败：\(error.localizedDescription)")
         }
-        await notesFetch
     }
 
-    private func fetchNotes() async {
-        do {
-            let request = URLRequest(url: UserReleaseNotes.remoteURL, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 12)
-            let (data, response) = try await URLSession.shared.data(for: request)
-            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode),
-                  let document = String(data: data, encoding: .utf8) else { return }
-            let parsed = UserReleaseNotes.parse(document)
-            guard !parsed.isEmpty else { return }
-            notes = UserReleaseNotes.merge(preferred: parsed, fallback: notes)
-            UserDefaults.standard.set(document, forKey: Self.notesCacheKey)
-        } catch {
-            // 日志拉取失败不覆盖内置内容，也不影响 Release 版本检测结果。
-            AppLog.shared.w("用户更新日志暂未刷新，保留本地内容")
+    func refreshNotes(force: Bool = false) async {
+        if let notesTask { await notesTask.value; return }
+        guard notesRefresh.shouldRefresh(now: Date(), force: force) else { return }
+        let task = Task { @MainActor in
+            defer { self.notesTask = nil }
+            do {
+                let document = try await UserReleaseNotesLoader.load { try await URLSession.shared.data(for: $0) }
+                let parsed = UserReleaseNotes.parse(document)
+                self.notes = parsed
+                UserDefaults.standard.set(document, forKey: Self.notesCacheKey)
+                self.notesRefresh.finish(now: Date(), succeeded: true)
+                AppLog.shared.i("用户更新日志已刷新并缓存：\(parsed.count) 个版本，文档 \(document.utf8.count) 字节")
+            } catch {
+                self.notesRefresh.finish(now: Date(), succeeded: false)
+                AppLog.shared.w("用户更新日志刷新失败，保留本地内容；下次进入时重试")
+            }
         }
+        notesTask = task
+        await task.value
     }
 }
 
@@ -89,11 +101,12 @@ private struct SoftwareRelease: Decodable, Identifiable {
 struct SoftwareUpdateCard: View {
     @Environment(\.appColors) private var colors
     @Environment(\.openURL) private var openURL
+    @Environment(\.scenePhase) private var scenePhase
     @ObservedObject private var releases = SoftwareReleaseStore.shared
     @State private var expandedID: String?
     @State private var showAll = false
 
-    private let tutorialURL = URL(string: "https://github.com/yehu-imei/Guides/blob/main/Tutorial/.ipa%E7%9A%84%E5%AE%89%E8%A3%85")!
+    private let tutorialURL = URL(string: "https://github.com/yehu-imei/Guides/blob/main/Tutorial/.ipa%E7%9A%84%E5%AE%89%E8%A3%85.md")!
     private var currentVersion: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "3.1.0"
     }
@@ -138,13 +151,16 @@ struct SoftwareUpdateCard: View {
                 .buttonStyle(AccentButtonStyle(colors: colors, radius: 12, height: 44))
                 .disabled(releases.checking).padding(.top, 14)
                 Button { openURL(tutorialURL) } label: {
-                    Text("自签教程").font(.system(size: 14)).foregroundStyle(colors.accent)
+                    Text("安装教程").font(.system(size: 14)).foregroundStyle(colors.accent)
                         .frame(maxWidth: .infinity).frame(height: 44)
                         .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(colors.border))
                 }.buttonStyle(InstantButtonStyle()).padding(.top, 10)
             }
         }
         .task { await releases.check() }
+        .onChange(of: scenePhase) { phase in
+            if phase == .active { Task { await releases.refreshNotes() } }
+        }
     }
 
     private func releaseRow(_ release: UserReleaseNote) -> some View {

@@ -15,6 +15,12 @@ struct UserReleaseNote: Equatable, Identifiable {
 /// 专用用户日志格式。只识别版本、日期及显式平台标签，不按“新增/修复”等关键词截取。
 enum UserReleaseNotes {
     static let remoteURL = URL(string: "https://raw.githubusercontent.com/yehu-imei/linyu/master/docs/APP_CHANGELOG.md")!
+    static let fallbackURL = URL(string: "https://api.github.com/repos/yehu-imei/linyu/contents/docs/APP_CHANGELOG.md?ref=master")!
+    static func local(document: String, bundled: [UserReleaseNote]) -> [UserReleaseNote] {
+        let cached = parse(document)
+        // 有效的完整文档是唯一来源，删除的版本不能被旧缓存/包内文档重新补回来。
+        return cached.isEmpty ? bundled : cached
+    }
     static func parse(_ source: String, platform: String = "iOS") -> [UserReleaseNote] {
         guard source.utf8.count <= 131_072, source.contains("<!-- linyu-release-notes:1 -->") else { return [] }
         var result: [UserReleaseNote] = []
@@ -53,5 +59,42 @@ enum UserReleaseNotes {
         guard let url = Bundle.main.url(forResource: "APP_CHANGELOG", withExtension: "md"),
               let text = try? String(contentsOf: url, encoding: .utf8) else { return [] }
         return parse(text)
+    }
+}
+
+/// 仅合并几秒内的重复生命周期回调，不能以版本检查成功作为日志不再更新的依据。
+struct ReleaseNotesRefreshPolicy {
+    private var lastAttempt: Date?
+    private var succeeded = false
+    func shouldRefresh(now: Date, force: Bool) -> Bool {
+        guard !force, let lastAttempt else { return true }
+        return now.timeIntervalSince(lastAttempt) >= (succeeded ? 15 : 5)
+    }
+    mutating func finish(now: Date, succeeded: Bool) {
+        lastAttempt = now
+        self.succeeded = succeeded
+    }
+}
+
+enum UserReleaseNotesLoader {
+    /// 两个地址都属于用户自己的 GitHub 仓库，不引入第三方镜像。
+    static func load(fetch: (URLRequest) async throws -> (Data, URLResponse)) async throws -> String {
+        for url in [UserReleaseNotes.remoteURL, UserReleaseNotes.fallbackURL] {
+            try Task.checkCancellation()
+            do {
+                var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 8)
+                request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
+                request.setValue("application/vnd.github.raw+json", forHTTPHeaderField: "Accept")
+                let (data, response) = try await fetch(request)
+                guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode),
+                      data.count <= 131_072,
+                      let document = String(data: data, encoding: .utf8),
+                      !UserReleaseNotes.parse(document).isEmpty else { continue }
+                return document
+            } catch {
+                if error is CancellationError || Task.isCancelled { throw CancellationError() }
+            }
+        }
+        throw URLError(.cannotLoadFromNetwork)
     }
 }

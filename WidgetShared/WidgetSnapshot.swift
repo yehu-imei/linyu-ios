@@ -135,6 +135,30 @@ struct WidgetCommand: Equatable, Identifiable {
         // 旧开启入口允许恢复同设备已有订单；关闭始终严格绑定原订单。
         return kind == .start ? !device.occupied : device.running && device.orderNo == orderNo && device.startedAt == startedAt
     }
+
+    var deliveryKey: String {
+        [kind.rawValue, owner, token, sn, orderNo, String(startedAt), billID].joined(separator: "|")
+    }
+}
+
+/// 同一次桌面点击可能经系统重复交付；普通首页入口不能抢占尚未执行的开关动作。
+struct WidgetDeliveryPolicy {
+    private var lastKey = ""
+    private var lastReceived = Date.distantPast
+    private var navigationKeys: Set<String> = []
+
+    mutating func enteredBackground() { navigationKeys.removeAll() }
+
+    mutating func accept(_ request: WidgetCommand, pending: WidgetCommand?, handling: Bool, now: Date = Date()) -> Bool {
+        guard !handling else { return false }
+        if let pending, !pending.kind.isNavigation { return false }
+        if request.kind.isNavigation, navigationKeys.contains(request.deliveryKey) { return false }
+        guard request.deliveryKey != lastKey || now.timeIntervalSince(lastReceived) >= 1 else { return false }
+        lastKey = request.deliveryKey
+        lastReceived = now
+        if request.kind.isNavigation { navigationKeys.insert(request.deliveryKey) }
+        return true
+    }
 }
 
 enum WidgetGroupPolicy {
