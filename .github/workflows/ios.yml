@@ -56,7 +56,7 @@ jobs:
             -o "$RUNNER_TEMP/linyu-display-tests"
           "$RUNNER_TEMP/linyu-display-tests"
           swiftc -swift-version 5 -parse-as-library \
-            WidgetShared/WidgetSnapshot.swift LinYu/ColorContrastPolicy.swift Tests/WidgetRegression.swift \
+            WidgetShared/WidgetSnapshot.swift WidgetShared/ConsumptionCachePolicy.swift LinYu/ColorContrastPolicy.swift Tests/WidgetRegression.swift \
             -o "$RUNNER_TEMP/linyu-widget-tests"
           "$RUNNER_TEMP/linyu-widget-tests"
 

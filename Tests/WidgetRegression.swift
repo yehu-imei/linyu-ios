@@ -100,6 +100,10 @@ import Foundation
         check(!ColorContrastPolicy.usesDarkForeground(red: 0.6, green: 0.6, blue: 0.6), "中灰强调色按 Android 线性亮度使用白字")
         check(ColorContrastPolicy.usesDarkForeground(red: 0.8, green: 0.8, blue: 0.8), "浅色强调色使用深色文字")
         check(!ColorContrastPolicy.usesDarkForeground(red: 0, green: 0, blue: 0) && ColorContrastPolicy.usesDarkForeground(red: 1, green: 1, blue: 1), "黑白强调色对比正确")
+        check(ConsumptionCachePolicy.shouldUpdate(sameDevice: true, amount: 1.84, billTime: 200, cachedTime: 100), "新账单更新上次设备消费")
+        check(!ConsumptionCachePolicy.shouldUpdate(sameDevice: true, amount: 0.5, billTime: 100, cachedTime: 200), "旧账单不覆盖刚结算金额")
+        check(!ConsumptionCachePolicy.shouldUpdate(sameDevice: false, amount: 1.84, billTime: 200, cachedTime: 100), "不同设备账单不串消费")
+        check(!ConsumptionCachePolicy.shouldUpdate(sameDevice: true, amount: 0, billTime: 200, cachedTime: 100), "未结算零金额不抹掉历史消费")
         if failures > 0 { fatalError("\(failures) widget checks failed") }
     }
 }

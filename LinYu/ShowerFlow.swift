@@ -1141,6 +1141,21 @@ final class ShowerFlow: ObservableObject {
             // 对账修正缓存和通知，不打断当前操作弹出历史订单提示。
             settlementRevision += 1
         }
+        // Android loadBills 同步更新上次设备；不能只等本机关闭事件才能刷新消费。
+        if let newest = bills.first, !Prefs.lastDeviceSnCode.isEmpty {
+            let sn = Prefs.lastDeviceSnCode
+            let matching: Bool
+            if let billSN = newest.deviceSnCode, !billSN.isEmpty {
+                matching = billSN == sn || billSN == deviceInfoProvider?(sn)?.macAddress
+            } else {
+                matching = newest.displayNamePart == Prefs.lastDeviceName && newest.deviceTypeLabel == Prefs.lastDeviceTypeName
+            }
+            let time = BalanceEstimator.billTimeMs(newest.consumeDate ?? "")
+            if ConsumptionCachePolicy.shouldUpdate(sameDevice: matching, amount: newest.yuan ?? 0,
+                billTime: time, cachedTime: Prefs.consumeRecordedAt(sn)) {
+                Prefs.recordConsume(sn, amount: newest.yuan!, atMs: time)
+            }
+        }
         return result.updates
     }
 
