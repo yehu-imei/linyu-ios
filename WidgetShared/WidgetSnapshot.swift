@@ -48,6 +48,16 @@ struct WidgetSnapshot: Codable, Equatable {
         let chosen = id.isEmpty ? lastDevice : id
         return devices.first { ($0.id == chosen || $0.aliases?.contains(chosen) == true) && ($0.selectable || $0.running) }
     }
+    /// 展示可回退；具体按钮仍绑定实际渲染的设备，不把旧控制链接改投另一台。
+    func displayedDevice(_ preferredID: String) -> WidgetDevice? {
+        let last = selected("")
+        if last?.running == true { return last }
+        if let preferred = selected(preferredID) { return preferred }
+        if let last { return last }
+        // 只有一台正在使用时保留停止入口，多台时不擅自挑选。
+        let running = devices.filter(\.running)
+        return running.count == 1 ? running[0] : nil
+    }
     /// 状态转换时使旧按钮失效；金额和信号刷新不作废按钮。
     var controlIdentity: String {
         owner + "|" + devices.sorted { $0.id < $1.id }.map {
@@ -186,6 +196,14 @@ enum WidgetSharedStore {
     static func select(_ value: Selection, slot: String) {
         guard let url = selectionURL(slot), let data = try? JSONEncoder().encode(value) else { return }
         try? data.write(to: url, options: writeOptions)
+    }
+    static func followLastDevice(owner: String) {
+        for slot in ["1", "2", "3", "4"] {
+            var value = selection(slot, owner: owner)
+            value.owner = owner
+            value.device = ""
+            select(value, slot: slot)
+        }
     }
     private static func selectionURL(_ slot: String) -> URL? {
         guard ["1", "2", "3", "4"].contains(slot) else { return nil }

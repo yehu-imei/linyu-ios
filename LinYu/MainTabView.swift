@@ -227,6 +227,11 @@ struct MainTabView: View {
         // 订单变化（新开阀 / 被清掉）时同步监控任务
         .onChange(of: flow.restoredOrders) { _ in flow.startOrderWatch() }
         .onChange(of: flow.activeOrder?.snCode) { _ in
+            if flow.activeOrder != nil {
+                // Android 在 App 开始用水后，所有小组件跟随这次使用的设备。
+                WidgetSharedStore.followLastDevice(owner: AppNotifications.accountKey)
+            }
+            widgets.sync(store: store, flow: flow, scanner: scanner, force: true)
             showerMinimized = false
             settingsVisible = false
             if flow.activeOrder == nil { tab = 0 }

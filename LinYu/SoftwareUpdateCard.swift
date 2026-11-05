@@ -5,10 +5,17 @@ import SwiftUI
 private final class SoftwareReleaseStore: ObservableObject {
     static let shared = SoftwareReleaseStore()
     @Published private(set) var releases: [SoftwareRelease] = []
+    @Published private(set) var notes: [UserReleaseNote]
     @Published private(set) var checking = false
     @Published private(set) var checked = false
     @Published private(set) var failed = false
     private var checkTask: Task<Void, Never>?
+    private static let notesCacheKey = "userReleaseNotes.v1"
+
+    private init() {
+        let cached = UserReleaseNotes.parse(UserDefaults.standard.string(forKey: Self.notesCacheKey) ?? "")
+        notes = UserReleaseNotes.merge(preferred: cached, fallback: UserReleaseNotes.bundled)
+    }
 
     func check(force: Bool = false) async {
         if let checkTask { await checkTask.value; return }
@@ -25,6 +32,7 @@ private final class SoftwareReleaseStore: ObservableObject {
         checking = true
         failed = false
         defer { checking = false }
+        async let notesFetch: Void = fetchNotes()
         do {
             let url = URL(string: "https://api.github.com/repos/yehu-imei/linyu/releases?per_page=30")!
             var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 20)
@@ -45,18 +53,34 @@ private final class SoftwareReleaseStore: ObservableObject {
             failed = true
             AppLog.shared.w("检查更新失败：\(error.localizedDescription)")
         }
+        await notesFetch
+    }
+
+    private func fetchNotes() async {
+        do {
+            let request = URLRequest(url: UserReleaseNotes.remoteURL, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 12)
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode),
+                  let document = String(data: data, encoding: .utf8) else { return }
+            let parsed = UserReleaseNotes.parse(document)
+            guard !parsed.isEmpty else { return }
+            notes = UserReleaseNotes.merge(preferred: parsed, fallback: notes)
+            UserDefaults.standard.set(document, forKey: Self.notesCacheKey)
+        } catch {
+            // 日志拉取失败不覆盖内置内容，也不影响 Release 版本检测结果。
+            AppLog.shared.w("用户更新日志暂未刷新，保留本地内容")
+        }
     }
 }
 
 private struct SoftwareRelease: Decodable, Identifiable {
     let id: Int
     let tagName: String
-    let body: String?
     let publishedAt: String?
     let draft: Bool
     let prerelease: Bool
     enum CodingKeys: String, CodingKey {
-        case id, body, draft, prerelease
+        case id, draft, prerelease
         case tagName = "tag_name", publishedAt = "published_at"
     }
 }
@@ -66,7 +90,7 @@ struct SoftwareUpdateCard: View {
     @Environment(\.appColors) private var colors
     @Environment(\.openURL) private var openURL
     @ObservedObject private var releases = SoftwareReleaseStore.shared
-    @State private var expandedID: Int?
+    @State private var expandedID: String?
     @State private var showAll = false
 
     private let tutorialURL = URL(string: "https://github.com/yehu-imei/Guides/blob/main/Tutorial/.ipa%E7%9A%84%E5%AE%89%E8%A3%85")!
@@ -92,14 +116,14 @@ struct SoftwareUpdateCard: View {
                     .font(.system(size: 13)).foregroundStyle(colors.textSecondary).padding(.top, 4)
                 Text(status.0).font(.system(size: 13, weight: .medium))
                     .foregroundStyle(status.1).padding(.top, 8)
-                if !releases.releases.isEmpty {
+                if !releases.notes.isEmpty {
                     Divider().overlay(colors.border).padding(.top, 14).padding(.bottom, 10)
                     Text("更新日志").font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(colors.textPrimary).padding(.bottom, 2)
-                    ForEach(showAll ? releases.releases : Array(releases.releases.prefix(3))) { release in
+                    ForEach(showAll ? releases.notes : Array(releases.notes.prefix(3))) { release in
                         releaseRow(release)
                     }
-                    if releases.releases.count > 3 {
+                    if releases.notes.count > 3 {
                         Button { showAll.toggle() } label: {
                             Text(showAll ? "收起" : "展开全部")
                                 .font(.system(size: 12)).foregroundStyle(colors.accent)
@@ -123,13 +147,13 @@ struct SoftwareUpdateCard: View {
         .task { await releases.check() }
     }
 
-    private func releaseRow(_ release: SoftwareRelease) -> some View {
+    private func releaseRow(_ release: UserReleaseNote) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             Button { expandedID = expandedID == release.id ? nil : release.id } label: {
                 HStack(spacing: 6) {
-                    Text(release.tagName).font(.system(size: 13, weight: .semibold))
+                    Text(release.version).font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(colors.textPrimary)
-                    if compareVersion(release.tagName, currentVersion) == .orderedSame {
+                    if compareVersion(release.version, currentVersion) == .orderedSame {
                         Text("当前").font(.system(size: 10)).foregroundStyle(colors.success)
                             .padding(.horizontal, 5).padding(.vertical, 1)
                             .background(colors.success.opacity(0.12)).clipShape(RoundedRectangle(cornerRadius: 4))
@@ -140,39 +164,13 @@ struct SoftwareUpdateCard: View {
                 }.frame(minHeight: 40).contentShape(Rectangle())
             }.buttonStyle(InstantButtonStyle())
             if expandedID == release.id {
-                Text(notes(release.body)).font(.system(size: 12)).foregroundStyle(colors.textSecondary)
+                Text(release.text).font(.system(size: 12)).foregroundStyle(colors.textSecondary)
                     .textSelection(.enabled).fixedSize(horizontal: false, vertical: true).padding(.bottom, 6)
-                if let date = release.publishedAt {
-                    Text(String(date.prefix(10))).font(.system(size: 11))
-                        .foregroundStyle(colors.textSecondary.opacity(0.7)).padding(.bottom, 6)
-                }
+                Text(release.date).font(.system(size: 11))
+                    .foregroundStyle(colors.textSecondary.opacity(0.7)).padding(.bottom, 6)
                 Divider().overlay(colors.border)
             }
         }
-    }
-
-    private func notes(_ body: String?) -> String {
-        let source = (body ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !source.isEmpty else { return "本版本未填写更新详情。" }
-        // Match Android's release highlights, omitting download/install sections.
-        var highlights: [String] = []
-        var keeping = false
-        for raw in source.components(separatedBy: .newlines) {
-            let line = raw.trimmingCharacters(in: .whitespaces)
-            if line.hasPrefix("#") {
-                let title = line.drop(while: { $0 == "#" }).trimmingCharacters(in: .whitespaces)
-                keeping = ["新增", "功能", "修复", "bug"].contains { title.localizedCaseInsensitiveContains($0) }
-                if keeping { highlights.append(title) }
-            } else if keeping {
-                highlights.append(raw)
-            }
-        }
-        let content = highlights.isEmpty ? source : highlights.joined(separator: "\n")
-        return content.replacingOccurrences(of: #"(?m)^#{1,6}\s+"#, with: "", options: .regularExpression)
-            .replacingOccurrences(of: #"\[([^\]]+)\]\([^)]+\)"#, with: "$1", options: .regularExpression)
-            .replacingOccurrences(of: "**", with: "")
-            .replacingOccurrences(of: "__", with: "")
-            .replacingOccurrences(of: "`", with: "")
     }
 
     private func compareVersion(_ lhs: String, _ rhs: String) -> ComparisonResult {

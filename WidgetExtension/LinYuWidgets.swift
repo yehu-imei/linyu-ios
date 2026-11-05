@@ -144,7 +144,7 @@ struct LinYuWidgetView: View {
     var familyOverride: WidgetFamily? = nil
     private var family: WidgetFamily { familyOverride ?? systemFamily }
     private var snapshot: WidgetSnapshot { entry.snapshot }
-    private var device: WidgetDevice? { snapshot.selected(entry.selection.device) }
+    private var device: WidgetDevice? { snapshot.displayedDevice(entry.selection.device) }
     private var staleBusy: Bool { snapshot.busy && entry.date.timeIntervalSince(snapshot.date) > 30 }
     private var stateColor: Color { device?.running == true ? Color(red: 0.376, green: 0.647, blue: 0.98) : device?.occupied == true ? .orange : Color(red: 0.29, green: 0.87, blue: 0.50) }
     private func url(_ kind: WidgetCommandKind) -> URL { WidgetCommand.url(kind, snapshot: snapshot, device: device) }

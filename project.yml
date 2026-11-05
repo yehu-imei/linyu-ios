@@ -21,6 +21,8 @@ targets:
     type: application
     platform: iOS
     sources:
+      - path: docs/APP_CHANGELOG.md
+        buildPhase: resources
       - path: WidgetShared
       - path: WidgetExtension/LinYuWidgets.swift
       - path: LinYu

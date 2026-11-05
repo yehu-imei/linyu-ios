@@ -56,6 +56,22 @@ import Foundation
         snapshot.devices[0].startedAt = 456
         check(before != snapshot.controlIdentity, "新会话时间使旧控制身份失效")
         check(snapshot.selected("")?.id == "A", "默认选中上次设备")
+        var away = WidgetSnapshot()
+        away.owner = "school:account"; away.lastDevice = "cloud"
+        away.devices = [WidgetDevice(id: "cloud", name: "320房", detail: "热水器", emoji: "🚿", running: true, orderNo: "cloud-order", startedAt: 123, selectable: false)]
+        check(away.nearbyIDs.isEmpty && away.displayedDevice("old-selection")?.id == "cloud", "不在寝室且旧选项失效时，云端使用状态不依赖附近设备")
+        check(away.displayedDevice("old-selection")?.running == true, "正在用水优先展示，不被旧筛选隐藏")
+        let awayStop = WidgetCommand(url: WidgetCommand.url(.stop, snapshot: away, device: away.displayedDevice("old-selection")))!
+        check(awayStop.matches(away) && awayStop.sn == "cloud", "离开寝室时停止入口仍绑定真实订单")
+        away.devices[0].running = false; away.devices[0].selectable = true
+        check(away.displayedDevice("old-selection")?.id == "cloud", "关闭后仍显示持久化的上次设备")
+        check(away.selected("old-selection") == nil, "展示回退不让旧指定设备链接串台")
+        away.devices[0].selectable = false
+        check(away.displayedDevice("old-selection") == nil, "空闲跨寝室设备仍遵守筛选")
+        away.devices.append(WidgetDevice(id: "B", name: "321房", detail: "热水器", emoji: "🚿", running: true))
+        check(away.displayedDevice("missing")?.id == "B", "上次设备不可见时保留唯一进行中订单入口")
+        away.devices.append(WidgetDevice(id: "C", name: "322房", detail: "热水器", emoji: "🚿", running: true))
+        check(away.displayedDevice("missing") == nil, "多个未选中订单不猜测控制目标")
         let detail = WidgetCommand(url: WidgetCommand.url(.billDetail, snapshot: snapshot, device: nil, billID: "bill/123 中文"))!
         check(detail.kind == .billDetail && detail.billID == "bill/123 中文", "具体账单点击保留完整账单身份")
         let deviceLink = WidgetCommand(url: WidgetCommand.url(.device, snapshot: snapshot, device: snapshot.devices[0]))!
