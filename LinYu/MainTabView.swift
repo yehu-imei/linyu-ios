@@ -30,7 +30,11 @@ struct MainTabView: View {
     @Environment(\.scenePhase) private var scenePhase
     /// 进「我的 → 设置」时隐藏底部导航（Android 也是这么做的）
     @State private var settingsVisible = false
-    @State private var showerMinimized = false
+    // 与水控状态同一生命周期，不能在视图重建/组件唤起时复位。
+    private var showerMinimized: Bool {
+        get { !flow.usePageVisible }
+        nonmutating set { flow.setUsePageVisible(!newValue, reason: "页面导航") }
+    }
     /// 翻页方向（旧 tab < 新 tab 时向右滑）—— 对照 Android AnimatedContent 的 forward 判断
     @State private var slideForward = true
     /// 从首页改完设置（寝室筛选等）要让首页刷新，用一个计数器触发
@@ -98,31 +102,6 @@ struct MainTabView: View {
                 }
             }
 
-            // Toast：开阀/结算/扫描的提示都走这一条通道。
-            //
-            // ⚠️ 位置在**顶部**（对照 Android `LinYuToast` 的 Alignment.TopCenter
-            // + padding(top = 60.dp)），从上方滑入。放底部会和悬浮导航栏打架，
-            // 也和安卓端不一致。
-            if let toast = flow.toast, !toast.isEmpty {
-                VStack {
-                    LinYuToast(message: toast, isDark: isDark)
-                        .padding(.top, 60)
-                        .transition(
-                            .asymmetric(
-                                insertion: .move(edge: .top).combined(with: .opacity),
-                                removal: .opacity
-                            )
-                        )
-                        .allowsHitTesting(false)
-                    Spacer()
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                // Android 是屏幕顶端 60dp，不是安全区下面再加 60。
-                .ignoresSafeArea(.container, edges: .top)
-                // 这一层铺满全屏，但**不能拦点击**：它只是 Toast 的容器
-                .allowsHitTesting(false)
-                .animation(.easeInOut(duration: 0.18), value: toast)
-            }
         }
         // 铺到屏幕最下沿：Android 是 edge-to-edge + 各页面只加 statusBarsPadding，
         // 底部一律不留白。放在这一层，页面内部就不会各自算一遍安全区。
@@ -155,6 +134,7 @@ struct MainTabView: View {
                         onAccountChanged: { flow.toast = $0 })
         }
         .environmentObject(store)
+        .overlay { toastLayer }
         .environmentObject(userPresentation)
         .environment(\.appColors, backgrounds.colors(colors))
         .task {
@@ -188,10 +168,10 @@ struct MainTabView: View {
             if phase != .active { flow.stopOrderWatch() }
             guard phase == .active else { return }
             Task {
-                await AppNotifications.shared.refreshAuthorization()
                 // 先处理指定设备的停止请求，不让账单刷新延迟关阀。
-                await processNotificationActions()
                 await processWidgetCommand()
+                await processNotificationActions()
+                await AppNotifications.shared.refreshAuthorization()
                 await flow.reconcileOnResume()
                 await flow.reconcileSettlements()
                 await store.reload()
@@ -201,14 +181,17 @@ struct MainTabView: View {
         // 覆盖冷启动、前台点击通知，以及回调晚于 scenePhase 的情况。
         .onChange(of: notifications.actions) { _ in Task { await processNotificationActions() } }
         .onChange(of: widgets.command) { _ in Task { await processWidgetCommand() } }
-        .onReceive(store.objectWillChange.debounce(for: .milliseconds(300), scheduler: RunLoop.main)) { _ in
+        .onReceive(store.objectWillChange.throttle(for: .milliseconds(300), scheduler: RunLoop.main, latest: true).receive(on: RunLoop.main)) { _ in
             widgets.sync(store: store, flow: flow, scanner: scanner)
         }
-        .onReceive(flow.objectWillChange.debounce(for: .milliseconds(300), scheduler: RunLoop.main)) { _ in
+        .onReceive(flow.objectWillChange.throttle(for: .milliseconds(300), scheduler: RunLoop.main, latest: true).receive(on: RunLoop.main)) { _ in
             widgets.sync(store: store, flow: flow, scanner: scanner)
         }
-        .onReceive(scanner.$devices.debounce(for: .seconds(2), scheduler: RunLoop.main)) { _ in
+        .onReceive(scanner.$devices.throttle(for: .seconds(2), scheduler: RunLoop.main, latest: true).receive(on: RunLoop.main)) { _ in
             widgets.sync(store: store, flow: flow, scanner: scanner)
+        }
+        .onChange(of: scanner.isScanning) { scanning in
+            if !scanning { widgets.sync(store: store, flow: flow, scanner: scanner, force: true) }
         }
         .onChange(of: notifications.settingsRevision) { _ in flow.refreshInUseNotifications() }
         .onChange(of: notifications.destinationTab) { target in
@@ -216,10 +199,12 @@ struct MainTabView: View {
         }
         .task { consumeNotificationDestination() }
         .onChange(of: flow.isStarting) { busy in
+            if !busy { widgets.sync(store: store, flow: flow, scanner: scanner, force: true) }
             if !busy { Task { await processNotificationActions() } }
             if !busy { Task { await processWidgetCommand() } }
         }
         .onChange(of: flow.isStopping) { busy in
+            if !busy { widgets.sync(store: store, flow: flow, scanner: scanner, force: true) }
             if !busy { Task { await processNotificationActions() } }
             if !busy { Task { await processWidgetCommand() } }
         }
@@ -232,7 +217,13 @@ struct MainTabView: View {
         .onChange(of: Session.shared.isLoggedIn) { loggedIn in
             if !loggedIn { flow.reset(); deduct.reset(); store.cancelRequests(); scanner.stop() }
         }
-        .onChange(of: flow.settlementRevision) { _ in Task { await store.reload() } }
+        .onChange(of: flow.settlementRevision) { _ in
+            widgets.sync(store: store, flow: flow, scanner: scanner, force: true)
+            Task { await store.reload(); widgets.sync(store: store, flow: flow, scanner: scanner, force: true) }
+        }
+        .onChange(of: store.loading) { loading in
+            if !loading { widgets.sync(store: store, flow: flow, scanner: scanner, force: true) }
+        }
         // 订单变化（新开阀 / 被清掉）时同步监控任务
         .onChange(of: flow.restoredOrders) { _ in flow.startOrderWatch() }
         .onChange(of: flow.activeOrder?.snCode) { _ in
@@ -240,12 +231,24 @@ struct MainTabView: View {
             settingsVisible = false
             if flow.activeOrder == nil { tab = 0 }
         }
-        .onChange(of: flow.toast) { value in
-            guard let msg = value, !msg.isEmpty else { return }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
-                // 只在还是同一条消息时才清，避免把后来的新消息误关
-                if flow.toast == msg { flow.toast = nil }
+        .task(id: flow.toastRevision) {
+            let revision = flow.toastRevision
+            guard let msg = flow.toast, !msg.isEmpty else { return }
+            try? await Task.sleep(nanoseconds: 2_500_000_000)
+            guard !Task.isCancelled, flow.toastRevision == revision else { return }
+            flow.toast = nil
+        }
+    }
+
+    @ViewBuilder private var toastLayer: some View {
+        if let message = flow.toast, !message.isEmpty {
+            VStack {
+                LinYuToast(message: message, isDark: isDark).padding(.top, 60)
+                Spacer()
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .ignoresSafeArea(.container, edges: .top)
+            .allowsHitTesting(false)
         }
     }
 
@@ -258,7 +261,7 @@ struct MainTabView: View {
     }
 
     @MainActor private func processWidgetCommand() async {
-        guard scenePhase == .active, let request = widgets.command else { return }
+        guard let request = widgets.command else { return }
         // 导航不等待水控锁，也不在 await 后再次覆盖页面。忙碌时只消费旧导航。
         if request.kind.isNavigation {
             guard let action = widgets.consumeNavigation() else { return }
@@ -276,7 +279,7 @@ struct MainTabView: View {
             if action == .nearby || action == .device, !scanner.isScanning { scanner.start() }
             return
         }
-        guard !handlingWidget, !flow.controlBusy else { return }
+        guard scenePhase == .active, !handlingWidget, !flow.controlBusy else { return }
         handlingWidget = true
         defer { handlingWidget = false }
         let originalOrder = flow.activeOrder?.startedAt

@@ -37,6 +37,7 @@ targets:
         CFBundleDisplayName: 淋浴
         CFBundleShortVersionString: "3.1.0"
         CFBundleVersion: "18"
+        LinYuSourceRevision: "$(LINYU_SOURCE_REVISION)"
         CFBundleURLTypes:
           - CFBundleURLName: com.hualala.linyu.widget
             CFBundleURLSchemes:

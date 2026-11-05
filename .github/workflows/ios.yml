@@ -73,6 +73,7 @@ jobs:
             -destination 'generic/platform=iOS' \
             -archivePath build/LinYu.xcarchive \
             CODE_SIGN_IDENTITY="" \
+            LINYU_SOURCE_REVISION="$GITHUB_SHA" \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO \
             ENABLE_BITCODE=NO

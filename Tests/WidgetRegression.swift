@@ -27,7 +27,10 @@ import Foundation
         snapshot.devices[1].orderNo = "newOrder"
         check(!stop.matches(snapshot), "旧组件不能关闭同设备新订单")
         snapshot.devices[0].running = true
-        check(!start.matches(snapshot), "旧开阀按钮不能操作已运行的设备")
+        check(start.matches(snapshot), "旧开启入口允许进入同设备已有订单，由主程序恢复而非重复开阀")
+        snapshot.devices[0].occupied = true
+        check(!start.matches(snapshot), "他人占用的设备不能通过旧开启入口使用")
+        snapshot.devices[0].occupied = false
         snapshot.devices[0].running = false
         snapshot.devices[0].selectable = false
         check(!start.matches(snapshot), "寝室筛选也校验实际开阀入口")
@@ -45,6 +48,11 @@ import Foundation
         snapshot.balance = "¥ 5.00"
         snapshot.devices[0].rssi = -65
         check(before == snapshot.controlIdentity, "余额和信号刷新不使控制身份失效")
+        let stableStart = WidgetCommand(url: WidgetCommand.url(.start, snapshot: snapshot, device: snapshot.devices[0]))!
+        snapshot.devices[1].orderNo = "unrelated-order"
+        check(stableStart.matches(snapshot), "别的设备订单变化不作废上次设备开启入口")
+        snapshot.bills = []
+        check(stableStart.matches(snapshot), "账单刷新不作废云端上次设备入口")
         snapshot.devices[0].startedAt = 456
         check(before != snapshot.controlIdentity, "新会话时间使旧控制身份失效")
         check(snapshot.selected("")?.id == "A", "默认选中上次设备")

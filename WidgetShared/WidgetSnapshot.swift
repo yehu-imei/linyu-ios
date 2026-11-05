@@ -122,7 +122,8 @@ struct WidgetCommand: Equatable, Identifiable {
         guard !owner.isEmpty, owner == snapshot.owner, token == snapshot.token else { return false }
         if kind != .start && kind != .stop { return true }
         guard let device = snapshot.devices.first(where: { $0.id == sn }), device.selectable || device.running else { return false }
-        return kind == .start ? !device.running : device.running && device.orderNo == orderNo && device.startedAt == startedAt
+        // 旧开启入口允许恢复同设备已有订单；关闭始终严格绑定原订单。
+        return kind == .start ? !device.occupied : device.running && device.orderNo == orderNo && device.startedAt == startedAt
     }
 }
 

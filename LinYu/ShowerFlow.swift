@@ -77,6 +77,10 @@ final class ShowerFlow: ObservableObject {
     @Published private(set) var activeOrder: ActiveOrder? {
         didSet {
             guard workScope.isCurrent else { return }
+            AppLog.shared.i("当前订单写入：\(activeOrder?.snCode ?? "无")，订单=\(activeOrder?.orderNo ?? "无")")
+            if oldValue?.orderNo != activeOrder?.orderNo || oldValue?.snCode != activeOrder?.snCode {
+                setUsePageVisible(activeOrder != nil, reason: "订单切换")
+            }
             if oldValue?.snCode != activeOrder?.snCode {
                 liveConsumed = nil
                 didFireAutoClose = false
@@ -88,6 +92,13 @@ final class ShowerFlow: ObservableObject {
                 clearDeviceState(old.snCode)
             }
         }
+    }
+    @Published private(set) var usePageVisible = false
+    func setUsePageVisible(_ visible: Bool, reason: String) {
+        let target = visible && activeOrder != nil
+        guard usePageVisible != target else { return }
+        usePageVisible = target
+        AppLog.shared.i("使用页显示=\(target)，原因=\(reason)，设备=\(activeOrder?.snCode ?? "无")")
     }
     /// 已落盘、但当前**没进入使用页**的订单（App 重启 / 在别处开的阀）。
     ///
@@ -109,7 +120,10 @@ final class ShowerFlow: ObservableObject {
     /// 306 之后要问用户「要不要改用蓝牙」
     @Published var bleConfirmDevice: DeviceInfo?
     /// 轻提示
-    @Published var toast: String?
+    @Published var toast: String? {
+        didSet { toastRevision = UUID() }
+    }
+    @Published private(set) var toastRevision = UUID()
     @Published private(set) var isStopping = false
     @Published private(set) var lastConsumeYuan: Double?
     @Published private(set) var settlementRevision = 0
@@ -291,7 +305,6 @@ final class ShowerFlow: ObservableObject {
         let sn = device.snCode ?? ""
         // 同一台设备不重复开：已经在用就直接回使用页
         if let current = activeOrder, current.snCode == sn {
-            toast = "这台设备正在使用中"
             return
         }
         guard !sn.isEmpty else {
@@ -377,7 +390,6 @@ final class ShowerFlow: ObservableObject {
                 autoDisConSec: 0
             )
             startTimer()
-            toast = "已恢复进行中的订单"
 
         case .inUseByOthers:
             openingOccupied = true
@@ -501,7 +513,6 @@ final class ShowerFlow: ObservableObject {
                     autoDisConSec: 0
                 )
                 startTimer()
-                toast = "已恢复进行中的订单"
                 return
             }
             ble.disconnect()
@@ -1127,7 +1138,7 @@ final class ShowerFlow: ObservableObject {
             AppLog.shared.i("待对账补齐：\(update.snCode) ¥\(MoneyFormat.format(update.amount))")
         }
         if !result.updates.isEmpty {
-            toast = "上笔用水已结算：\(MoneyFormat.withSymbol(result.updates.reduce(0) { $0 + $1.amount }))"
+            // 对账修正缓存和通知，不打断当前操作弹出历史订单提示。
             settlementRevision += 1
         }
         return result.updates
