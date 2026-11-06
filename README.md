@@ -1,64 +1,68 @@
-# 🚿 淋浴 · LinYu iOS
+# 🚿 淋浴 (LinYu) · iOS
 
-趣智校园第三方 iOS 客户端，使用 SwiftUI + CoreBluetooth 开发，功能、文案和交互尽量与 [Android 端](https://github.com/yehu-imei/linyu) 一致
+[![Platform](https://img.shields.io/badge/Platform-iOS%2016%2B-black.svg)](https://developer.apple.com/ios/)
+[![Language](https://img.shields.io/badge/Language-Swift-orange.svg)](https://www.swift.org/)
+[![UI](https://img.shields.io/badge/UI-SwiftUI-blue.svg)](https://developer.apple.com/xcode/swiftui/)
+[![Version](https://img.shields.io/github/v/release/yehu-imei/linyu-ios?label=Version)](https://github.com/yehu-imei/linyu-ios/releases/latest)
+[![License](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/yehu-imei/linyu/blob/master/LICENSE)
 
-**当前版本：3.1.1（构建 19）** · 主应用 iOS 16+ · 桌面小组件 iOS 17+
+趣智校园第三方 iOS 客户端，用于控制校园热水器、查看消费账单。以简洁的界面提供设备操作、消费统计与个性化设置
 
-## 下载与安装
+**⬇️ [下载最新 IPA](https://github.com/yehu-imei/linyu-ios/releases/latest)** · [Gitee 镜像](https://gitee.com/yehu-imei/linyu-ios/releases) · [安装教程](https://github.com/yehu-imei/Guides/blob/main/Tutorial/.ipa%E7%9A%84%E5%AE%89%E8%A3%85.md)
 
-- [GitHub 下载 IPA](https://github.com/yehu-imei/linyu-ios/releases/tag/v3.1.1)
-- [Gitee 镜像与发行](https://gitee.com/yehu-imei/linyu-ios/releases)
-- [Android 原仓库：APK / IPA](https://github.com/yehu-imei/linyu/releases/tag/v3.1.1)
-- [作者的 iOS 自签安装教程](https://github.com/yehu-imei/Guides/blob/main/Tutorial/.ipa%E7%9A%84%E5%AE%89%E8%A3%85.md)
+> 支持 iOS 16 及以上，桌面小组件需 iOS 17 及以上。IPA 需要自行签名安装
+> Android 版本请前往 [淋浴主仓库](https://github.com/yehu-imei/linyu)
 
-两个 GitHub 仓库提供同一份 IPA，可用发行附件的 SHA-256 校验文件核对。IPA 不含可直接安装的开发者证书，需自行签名；更新时尽量沿用同一签名身份，提前备份重要数据
+## ✨ 功能
 
-如需桌面小组件，请通过 SideStore 等工具将淋浴作为独立 App 安装，并保留 LinYuWidgets 扩展及 App Group 共享权限。导入 LiveContainer 是容器运行方式，不等同于独立安装，不保证相同的系统通知和小组件能力。教程包含两种方式的说明，请按实际需求选择
+### 🚿 设备控制
 
-## 功能
+- **便捷登录**：短信验证码与密码登录，保存登录状态
+- **附近设备**：蓝牙扫描、信号强度显示、扫码选设备与寝室绑定
+- **开关热水**：支持云端热水器及兼容的蓝牙水表，提供订单恢复与消费结算
+- **使用提醒**：显示设备状态，提供开始、结束及异常情况的通知
 
-- 短信 / 密码登录、登录态保存、个人信息与账户管理
-- 附近设备扫描、扫码选设备、绑定寝室
-- 云端热水器及兼容 BLE 水表的开关水、订单恢复、结算与补结算
-- 钱包余额、账单明细、近七天 / 本月消费趋势、未支付账单处理
-- 使用码领取与次数限制、卡片排序和跨页面移动
-- 主页 / 使用页独立背景、主题配色、中文提示、日志导出
-- 系统通知、版本检查、精简更新日志与安装教程入口
-- 小型（2×2）设备卡片和中型（2×4）多页小组件，展示设备、上次消费、附近设备和账单
+### 💰 钱包与账单
 
-小组件开关会打开 App，由主应用核对账户、目标设备及订单后执行；附近设备和账单入口跳转对应页面。尺寸由 iOS 系统决定，无 Android 1×1 尺寸。切页与刷新由 WidgetKit 调度，不保证即时刷新
+- **余额与明细**：查看账户余额、消费记录、账单详情及未支付账单
+- **消费趋势**：近七天与本月统计，支持柱形图、折线图切换
+- **上次消费**：展示对应设备最近一次消费，方便核对用水支出
 
-## 3.1.1 修复重点
+### 🧩 桌面小组件
 
-- 蓝牙结算区分“服务器已记账”和“设备记录已清除”，清理未确认时保留消费金额，不上报订单作废
-- 整理小组件前台操作交接、页面导航及共享数据更新，减少入口重复处理
-- 对齐使用码、账户卡片、背景、通知和扫码权限反馈
-- 更新日志独立读取文档，支持本地缓存与联网刷新
+- **小型组件**：设备信息、使用状态、上次消费与开关入口
+- **中型组件**：切换设备控制、附近设备和账单页面
+- **快捷操作**：打开 App 操作对应设备，或进入设备详情、账单页面
 
-[用户精简日志](docs/APP_CHANGELOG.md) · [详细更新记录](CHANGELOG.md) · [发布与验收说明](docs/RELEASE_3.1.1.md)
+### 🎨 个性化与账户
 
-两端应用内更新日志的远程来源统一为 Android 仓库 master 分支的 docs/APP_CHANGELOG.md，联网取得有效文档后替换本地缓存，失败时保留已有内容。版本检查读取 Android 原仓库的正式 Release，因此该仓库也附带 IPA
+- **背景装扮**：主页和使用页独立设置背景，支持主题色与透明度调整
+- **卡片编辑**：调整卡片顺序，在“我的”和“设置”之间移动
+- **账户管理**：个人信息、使用码领取、手机号及密码管理
+- **运行日志**：导出日志，方便反馈问题
 
-## 能力边界
+## 📥 安装
 
-| 项目 | 当前实现 |
-| --- | --- |
-| 后台监控 | 不提供 Android 式常驻服务，不保证退到后台或被系统终止后仍自动关水 |
-| 使用中通知 | 静态状态提示，不提供实时计时或通知内关水按钮 |
-| 消费金额 | 以结束后的结算和账单为准；MQTT 仅有订单结束事件，不是使用中实时扣费，连接不可用时走 HTTP 对账 |
-| 蓝牙设备 | 需真机、蓝牙权限及足够近的距离；不同学校设备兼容性仍需分别验证 |
-| 小组件 | 需要保留扩展和共享权限；缓存展示不代表设备当前状态，执行前会再次核对 |
-| 安装更新 | IPA 需要自行签名、按签名工具要求续签，不是 App Store 自动安装 |
+1. 在 [Releases](https://github.com/yehu-imei/linyu-ios/releases/latest) 下载 `linyu-v版本号.ipa`
+2. 按照 [iOS 自签安装教程](https://github.com/yehu-imei/Guides/blob/main/Tutorial/.ipa%E7%9A%84%E5%AE%89%E8%A3%85.md) 完成签名与安装
+3. 首次使用时按提示开启蓝牙、相机和通知权限
 
-请确认关水结果后离开设备。构建、模拟器截图与自动化测试通过，不代表已完成所有学校设备的实测
+使用桌面小组件时，请将淋浴作为独立 App 安装，并保留小组件扩展及共享权限。导入 LiveContainer 不等同于独立安装，相关系统功能可能受限
 
-## 构建
+更新时建议沿用原签名方式，以便保留应用数据；签名续期按所用工具的说明操作
 
-GitHub Actions 在推送 main 或手动触发时执行：Swift 回归检查 → XcodeGen → Archive → 模拟器小组件截图 → IPA 校验打包。Artifacts 中的 LinYu-unsigned-ipa 是临时构建产物，正式安装包请从 Releases 下载
+## 使用说明
 
-构建不上传开发者证书。打包时仅附加 ad-hoc 签名以保留扩展共享权限声明，安装仍需重新签名。主应用与小组件版本必须一致
+- 蓝牙水表需要靠近设备操作；设备兼容性因学校和型号而异
+- iOS 不提供常驻后台用水监控，请确认关水成功后再离开设备
+- 消费金额以结束后的结算与账单为准，使用中不显示实时扣费
+- 小组件刷新由系统调度，显示内容可能存在延迟
 
-macOS 本地构建：
+## 🛠️ 开发
+
+使用 SwiftUI、CoreBluetooth 与 WidgetKit，工程通过 XcodeGen 管理
+
+在安装 Xcode 的 macOS 上运行：
 
 ```bash
 brew install xcodegen
@@ -66,25 +70,20 @@ xcodegen generate
 open LinYu.xcodeproj
 ```
 
-project.yml 是工程配置来源，LinYu.xcodeproj 和 Info.plist 由 XcodeGen 生成。Windows 可编辑代码，但 Swift / iOS 编译验证在 macOS 或 Actions 上完成
+也可通过仓库的 [GitHub Actions](https://github.com/yehu-imei/linyu-ios/actions/workflows/ios.yml) 构建 IPA。工程配置见 `project.yml`，回归测试位于 `Tests/`
 
-## 源码与文档
+## 📚 文档与反馈
 
-| 目录 | 内容 |
-| --- | --- |
-| LinYu/ | SwiftUI 页面、网络、云端与 BLE 水控、结算和持久化 |
-| WidgetShared/ | 主应用与小组件共享快照、身份与操作模型 |
-| WidgetExtension/ | WidgetKit 小组件 |
-| Tests/ | 不连接真实账户或水表的回归测试 |
-| docs/ | 用户日志、发布说明和按日期保留的开发记录 |
-| .github/workflows/ios.yml | 回归、构建与打包工作流 |
+- [更新日志](CHANGELOG.md)
+- [应用内精简日志](docs/APP_CHANGELOG.md)
+- [问题反馈](https://github.com/yehu-imei/linyu-ios/issues)
+- [Android 项目](https://github.com/yehu-imei/linyu) · [Android Gitee 镜像](https://gitee.com/yehu-imei/linyu)
+- [iOS Gitee 镜像](https://gitee.com/yehu-imei/linyu-ios)
 
-早期对齐清单和按日期命名的修复记录是当时的开发快照，不代表当前能力；以本 README、当前源码及最新发行说明为准
-
-Android：[GitHub](https://github.com/yehu-imei/linyu) · [Gitee](https://gitee.com/yehu-imei/linyu)
-
-iOS：[GitHub](https://github.com/yehu-imei/linyu-ios) · [Gitee](https://gitee.com/yehu-imei/linyu-ios)
+反馈时请附上应用版本、设备型号、操作步骤和相关日志，并遮盖手机号、验证码等个人信息
 
 ## 许可证
 
-[MIT](https://github.com/yehu-imei/linyu/blob/master/LICENSE)，沿用原项目许可证；本项目与官方趣智校园无隶属关系
+沿用原项目的 [MIT 许可证](https://github.com/yehu-imei/linyu/blob/master/LICENSE)
+
+本项目为第三方客户端，与官方趣智校园无隶属关系
