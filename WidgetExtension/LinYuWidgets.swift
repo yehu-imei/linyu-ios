@@ -51,24 +51,6 @@ struct WidgetPickIntent: AppIntent {
         return .result()
     }
 }
-struct WidgetOpenIntent: AppIntent {
-    static var title: LocalizedStringResource = "打开淋浴并执行操作"
-    static var openAppWhenRun: Bool = true
-    @Parameter(title: "目标") var destination: String
-    init() {}
-    init(_ url: URL) { destination = url.absoluteString }
-    @MainActor
-    func perform() async throws -> some IntentResult {
-        // 小型组件不支持多个 Link。只投递路由，水控仍由活跃场景处理。
-        // 不再对自己 UIApplication.open：会产生第二次唤起，且热启动不保证回调。
-        #if !LINYU_WIDGET_EXTENSION
-        if let url = URL(string: destination), WidgetCommand(url: url) != nil {
-            WidgetBridge.shared.receive(url)
-        }
-        #endif
-        return .result()
-    }
-}
 struct LinYuWidgetEntry: TimelineEntry {
     var date: Date
     var snapshot: WidgetSnapshot
@@ -149,11 +131,9 @@ struct LinYuWidgetView: View {
     private var stateColor: Color { device?.running == true ? Color(red: 0.376, green: 0.647, blue: 0.98) : device?.occupied == true ? .orange : Color(red: 0.29, green: 0.87, blue: 0.50) }
     private func url(_ kind: WidgetCommandKind) -> URL { WidgetCommand.url(kind, snapshot: snapshot, device: device) }
     @ViewBuilder private func destination<Content: View>(_ target: URL, @ViewBuilder label: () -> Content) -> some View {
-        if family == .systemSmall {
-            Button(intent: WidgetOpenIntent(target), label: label)
-        } else {
-            Link(destination: target, label: label)
-        }
+        // Apple 的场景链接接口支持 systemSmall 及更大组件的多个 Link。
+        // 所有尺寸统一经 onOpenURL 交付目标；不依赖重签后 Intent 的进程选择。
+        Link(destination: target, label: label)
     }
     private var action: WidgetCommandKind {
         if staleBusy { return .refresh }

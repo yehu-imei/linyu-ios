@@ -164,6 +164,7 @@ struct MainTabView: View {
         .onDisappear { kickWatch.stop() }
         // 回前台对齐用水状态（Android 的 `reconcileShowerOnResume`）
         .onChange(of: scenePhase) { phase in
+            if phase == .background { widgets.enteredBackground() }
             widgets.sync(store: store, flow: flow, scanner: scanner, force: true)
             if phase != .active { flow.stopOrderWatch() }
             guard phase == .active else { return }
@@ -178,9 +179,20 @@ struct MainTabView: View {
                 flow.startOrderWatch()
             }
         }
+        // 小组件 URL 可先于 scenePhase 更新送达。使用真实 UIApplication 状态再次取队列，
+        // 避免捕获旧 View 的 inactive 后一直等到下一次 isStarting/isStopping 改变。
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
+            Task {
+                await processWidgetCommand()
+                await processNotificationActions()
+            }
+        }
         // 覆盖冷启动、前台点击通知，以及回调晚于 scenePhase 的情况。
         .onChange(of: notifications.actions) { _ in Task { await processNotificationActions() } }
-        .onChange(of: widgets.command) { _ in Task { await processWidgetCommand() } }
+        .onChange(of: widgets.command) { _ in
+            // 普通导航在这一帧消费，不能排成 Task 后迟于软件内的开阀完成。
+            if !consumeWidgetNavigation() { Task { await processWidgetCommand() } }
+        }
         .onReceive(store.objectWillChange.throttle(for: .milliseconds(300), scheduler: RunLoop.main, latest: true).receive(on: RunLoop.main)) { _ in
             widgets.sync(store: store, flow: flow, scanner: scanner)
         }
@@ -265,57 +277,59 @@ struct MainTabView: View {
         notifications.destinationTab = nil
     }
 
+    @MainActor @discardableResult private func consumeWidgetNavigation() -> Bool {
+        guard let action = widgets.consumeNavigation() else { return false }
+        guard !flow.controlBusy, !handlingWidget else {
+            widgets.pendingDeviceSN = nil
+            widgets.pendingBillID = nil
+            AppLog.shared.i("组件导航已消费，保留当前水控页面")
+            return true
+        }
+        settingsVisible = false
+        userPresentation.page = nil
+        userPresentation.dialog = nil
+        showerMinimized = true
+        tab = action == .bills || action == .billDetail ? 1 : 0
+        if action == .nearby || action == .device, !scanner.isScanning { scanner.start() }
+        return true
+    }
+
     @MainActor private func processWidgetCommand() async {
+        if consumeWidgetNavigation() { return }
         guard let request = widgets.command else { return }
-        // 导航不等待水控锁，也不在 await 后再次覆盖页面。忙碌时只消费旧导航。
-        if request.kind.isNavigation {
-            guard let action = widgets.consumeNavigation() else { return }
-            guard !flow.controlBusy, !handlingWidget else {
-                widgets.pendingDeviceSN = nil
-                widgets.pendingBillID = nil
-                AppLog.shared.i("组件导航已消费，保留当前水控页面")
-                return
-            }
-            settingsVisible = false
-            userPresentation.page = nil
-            userPresentation.dialog = nil
-            showerMinimized = true
-            tab = action == .bills || action == .billDetail ? 1 : 0
-            if action == .nearby || action == .device, !scanner.isScanning { scanner.start() }
+        guard UIApplication.shared.applicationState == .active else {
+            AppLog.shared.i("组件操作等待 App 激活：\(request.kind.rawValue)")
             return
         }
-        guard scenePhase == .active, !handlingWidget, !flow.controlBusy else { return }
+        guard !handlingWidget, !flow.controlBusy else {
+            AppLog.shared.i("组件操作等待控制链空闲：\(request.kind.rawValue)")
+            return
+        }
         handlingWidget = true
         defer { handlingWidget = false }
-        let originalOrder = flow.activeOrder?.startedAt
         // 先让操作目标与进度可见，再查台账/开关阀，不能等网络结束才退出设置或背景页。
         settingsVisible = false
         userPresentation.page = nil
         userPresentation.dialog = nil
-        showerMinimized = request.kind != .stop
-        tab = request.kind == .bills || request.kind == .billDetail ? 1 : 0
+        // 页面只在接收请求时选定。刷新完成不再次导航，避免覆盖用户随后开启的使用页。
+        if request.kind == .refreshNearby { showerMinimized = true; tab = 0 }
+        if request.kind == .start { showerMinimized = true; tab = 0 }
         flow.peripheralProvider = { [scanner] sn in scanner.peripheral(forSn: sn) }
         flow.centralProvider = { [scanner] in scanner.manager }
         flow.deviceInfoProvider = { [store] sn in store.deviceInfos[sn] }
-        guard let action = await widgets.process(store: store, flow: flow, scanner: scanner) else { return }
-        // 刷新期间用户可能已从软件内开启设备，旧刷新不能把使用页最小化。
-        if request.kind != .start, request.kind != .stop, flow.activeOrder?.startedAt != originalOrder { return }
-        settingsVisible = false
-        userPresentation.page = nil
-        userPresentation.dialog = nil
-        if action == .bills || action == .billDetail { showerMinimized = true; tab = 1; await store.reload() }
-        else if action == .nearby || action == .device { showerMinimized = true; tab = 0; if !scanner.isScanning { scanner.start() } }
-        else if action == .start || action == .stop { tab = 0; showerMinimized = flow.activeOrder == nil }
-        else { tab = 0; showerMinimized = true }
+        _ = await widgets.process(store: store, flow: flow, scanner: scanner)
+        if request.kind == .start, flow.activeOrder?.snCode == request.sn {
+            flow.setUsePageVisible(true, reason: "组件开启完成")
+        }
         widgets.sync(store: store, flow: flow, scanner: scanner, force: true)
     }
 
     @MainActor
     private func processNotificationActions() async {
-        guard scenePhase == .active, !handlingNotification else { return }
+        guard UIApplication.shared.applicationState == .active, !handlingNotification else { return }
         handlingNotification = true
         defer { handlingNotification = false }
-        while scenePhase == .active, let action = notifications.actions.first {
+        while UIApplication.shared.applicationState == .active, let action = notifications.actions.first {
             guard await flow.handleNotification(action) else { return }
             notifications.consume(action.id)
             if !action.stop, flow.activeOrder?.snCode == action.target.snCode {

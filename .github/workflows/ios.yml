@@ -1,6 +1,6 @@
 name: Build iOS
 
-# 空壳验证用：手动触发，以及推 main 时自动跑
+# 回归检查、Archive 和小组件打包；main 推送或手动触发，不自动创建发行
 on:
   workflow_dispatch:
   push:
@@ -40,6 +40,7 @@ jobs:
             LinYu/UserCardLayout.swift Tests/UserCardLayoutRegression.swift \
             LinYu/BleCallbackGuard.swift Tests/BleCallbackRegression.swift \
             LinYu/BleReplyBuffer.swift Tests/BleReplyBufferRegression.swift \
+            LinYu/BleSettlementCleanup.swift Tests/BleSettlementRegression.swift \
             LinYu/NotificationPolicy.swift Tests/NotificationFeedbackRegression.swift \
             LinYu/UseCodeQuotaStore.swift \
             LinYu/DeviceControlPolicy.swift LinYu/CloudShower.swift Tests/DeviceControlRegression.swift \
@@ -121,7 +122,9 @@ jobs:
           EXT="$APP/PlugIns/LinYuWidgets.appex"
           test -f "$EXT/LinYuWidgets"
           test "$(/usr/libexec/PlistBuddy -c 'Print :NSExtension:NSExtensionPointIdentifier' "$EXT/Info.plist")" = "com.apple.widgetkit-extension"
-          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$EXT/Info.plist")" = "18"
+          for KEY in CFBundleVersion CFBundleShortVersionString; do
+            test "$(/usr/libexec/PlistBuddy -c "Print :$KEY" "$EXT/Info.plist")" = "$(/usr/libexec/PlistBuddy -c "Print :$KEY" "$APP/Info.plist")"
+          done
 
           # Archive 关闭了签名：仅生成 entitlements 文件并不会把共享组写进二进制。
           # 给 SideStore 保留可读取的权限声明，安装时仍须用户账号重新签名。
