@@ -465,6 +465,7 @@ final class ShowerFlow: ObservableObject {
             openingText = "正在结清上一笔遗留账单…"
             AppLog.shared.i("蓝牙设备有遗留未结算数据（state=\(st.state)），先补结算")
             let settled = await settlePendingRecords(
+                expectedMac: st.mac,
                 protocolType: st.protocolType,
                 randomNumber: st.randomNumber,
                 deviceName: device.displayName,
@@ -473,8 +474,12 @@ final class ShowerFlow: ObservableObject {
             )
             ble.disconnect()
             guard workScope.isCurrent else { return }
-            guard settled.completed else {
+            guard settled.uploadAccepted else {
                 errorMessage = "设备有未结算记录，自动补结算失败，请稍后重试"
+                return
+            }
+            guard settled.recordCleared else {
+                errorMessage = "账单已结清，设备清理未确认，请靠近后重试"
                 return
             }
             if !allowNewOrder {
@@ -795,6 +800,7 @@ final class ShowerFlow: ObservableObject {
 
         // ④~⑥ 采集 → 上传 → 写回（与「补结算」同一条路，见 settlePendingRecords）
         let result = await settlePendingRecords(
+            expectedMac: order.device.connectMac,
             protocolType: protocolType,
             randomNumber: randomNumber,
             deviceName: order.device.displayName,
@@ -806,7 +812,7 @@ final class ShowerFlow: ObservableObject {
             Prefs.recordConsume(order.snCode, amount: amount)
         }
         finishWithAmount(result.amount, autoClosed: autoClosed, deviceName: order.device.displayName, snCode: order.snCode, elapsed: elapsed)
-        if !result.completed {
+        if !result.uploadAccepted {
             // ⚠️ 蓝牙通道没有服务端兜底：不上报的话这一单会一直挂在预扣状态
             await reportFail(order)
         }
@@ -819,20 +825,21 @@ final class ShowerFlow: ObservableObject {
     /// 1. 关阀后的结算
     /// 2. 开阀前发现设备 `state=3/6`（有遗留未结算记录）的**补结算**
     ///
-    /// @return `completed` = 上传被服务端接受；`amount` = 本次消费（元，nil = 没拿到）
+    /// 上传被接受和设备记录已清除分别返回，保留已记账金额（元）。
     @discardableResult
     private func settlePendingRecords(
+        expectedMac: String,
         protocolType: String,
         randomNumber: String,
         deviceName: String,
         orderNo: String,
         consumeDate: String
-    ) async -> (completed: Bool, amount: Double?) {
-        guard workScope.isCurrent else { return (false, nil) }
+    ) async -> BleSettlementResult {
+        guard workScope.isCurrent else { return .failed }
         // ① 采集
         guard let payload = await ble.collect() else {
             AppLog.shared.w("结算：0x85 采集失败")
-            return (false, nil)
+            return .failed
         }
         // ⚠️ 设备回的不是账单就不能上传。官方 SDK 的消费体是 42 字节起步，
         // 首字节 0x80 是成功标记。拿到错误应答或半截载荷还硬上传的话，
@@ -840,11 +847,11 @@ final class ShowerFlow: ObservableObject {
         guard payload.count >= 42, payload.first == 0x80 else {
             let firstHex = payload.first.map { String(format: "0x%02X", $0) } ?? "空"
             AppLog.shared.w("结算：消费数据无效（\(payload.count)B，首字节 \(firstHex)），放弃上传")
-            return (false, nil)
+            return .failed
         }
 
         // ② 上传（xfData 必须**小写**：服务端对大小写敏感，签名用小写、上传字段也得小写）
-        guard workScope.isCurrent else { return (false, nil) }
+        guard workScope.isCurrent else { return .failed }
         let xfData = BleFrame.toHex(payload).lowercased()
         guard let sig = BleSign.signUpload(
             loginCode: Session.shared.loginCode,
@@ -852,7 +859,7 @@ final class ShowerFlow: ObservableObject {
             xfData: xfData
         ) else {
             AppLog.shared.w("结算：签名失败")
-            return (false, nil)
+            return .failed
         }
 
         do {
@@ -869,29 +876,44 @@ final class ShowerFlow: ObservableObject {
                     AppLog.shared.e("结算上传被拒（170）：签名与上传字段不一致，请带日志反馈")
                 }
                 AppLog.shared.w("结算上传失败（errorCode=\(code)）：\(resp.displayMessage ?? "")")
-                return (false, nil)
+                return .failed
             }
 
             let yuan = body.upMoneyYuan
-            guard workScope.isCurrent else { return (false, nil) }
+            guard workScope.isCurrent else { return .failed }
 
-            // ③ 写回设备（清掉离线记录）；写回失败不影响——服务端已经记账
-            if let clData = body.clData, !clData.isEmpty,
-               let plain = KlcxkjCrypto.decryptByAes(clData) {
-                let hexPart = plain.contains("-")
-                    ? String(plain.split(separator: "-", maxSplits: 1).last ?? "")
-                    : plain
-                if let bytes = BleFrame.fromHex(hexPart), !bytes.isEmpty {
-                    let ok = await ble.writeBack(bytes)
-                    AppLog.shared.i(ok ? "0x86 写回成功，设备记录已清" : "0x86 写回失败（服务端已记账）")
+            // ③ 写回后只读确认，不重新上传；失败不抹掉已经确认的记账金额。
+            let recordCleared = await BleSettlementCleanup.confirm(
+                isCurrent: { self.workScope.isCurrent },
+                writeBack: {
+                    guard let clData = body.clData, !clData.isEmpty,
+                          let plain = KlcxkjCrypto.decryptByAes(clData) else {
+                        AppLog.shared.w("结算写回数据无效（服务端已记账）")
+                        return
+                    }
+                    let hexPart = plain.contains("-")
+                        ? String(plain.split(separator: "-", maxSplits: 1).last ?? "") : plain
+                    guard let bytes = BleFrame.fromHex(hexPart), !bytes.isEmpty else {
+                        AppLog.shared.w("结算写回数据格式无效（服务端已记账）")
+                        return
+                    }
+                    if !(await self.ble.writeBack(bytes)) {
+                        AppLog.shared.w("结算写回应答未确认（服务端已记账）")
+                    }
+                },
+                readState: {
+                    guard let state = await self.ble.query(timeout: 4), !expectedMac.isEmpty,
+                          state.mac.uppercased() == expectedMac.uppercased() else { return nil }
+                    return state.state
                 }
-            }
+            )
+            AppLog.shared.i(recordCleared ? "结算后设备已空闲，记录已清" : "账单已结清，设备清理未确认")
             AppLog.shared.i("结算上传成功：设备=\(deviceName) orderNo=\(orderNo) upMoney=\(body.upMoney?.value ?? body.consumeMoney?.value ?? -1)")
             _ = consumeDate
-            return (true, yuan)
+            return BleSettlementResult(uploadAccepted: true, recordCleared: recordCleared, amount: yuan)
         } catch {
             AppLog.shared.w("上传结算失败：\(error.localizedDescription)")
-            return (false, nil)
+            return .failed
         }
     }
 

@@ -108,7 +108,7 @@ struct SoftwareUpdateCard: View {
 
     private let tutorialURL = URL(string: "https://github.com/yehu-imei/Guides/blob/main/Tutorial/.ipa%E7%9A%84%E5%AE%89%E8%A3%85.md")!
     private var currentVersion: String {
-        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "3.1.0"
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "3.1.1"
     }
     private var hasUpdate: Bool {
         guard let latest = releases.releases.first else { return false }
