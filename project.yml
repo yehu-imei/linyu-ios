@@ -72,6 +72,7 @@ targets:
     sources:
       - path: WidgetExtension
       - path: WidgetShared
+      - path: LinYu/MoneyFormat.swift
     info:
       path: WidgetExtension/Info.plist
       properties:

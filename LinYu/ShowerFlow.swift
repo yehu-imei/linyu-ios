@@ -207,6 +207,8 @@ final class ShowerFlow: ObservableObject {
         ActiveOrderStore.update { records in
             if let index = records.firstIndex(where: { $0.snCode == order.snCode }) {
                 records[index].isBluetooth = order.channel == .ble
+                // 同时修正旧版本保存的 0，避免使用页已正确而小组件仍显示 0.00。
+                records[index].preDeduct = order.preDeductMoney ?? 0
             }
         }
         if order.channel == .ble {
@@ -368,7 +370,7 @@ final class ShowerFlow: ObservableObject {
                 protocolType: "",
                 randomNumber: "",
                 startedAt: startDate(sn),
-                preDeductMoney: pre,
+                preDeductMoney: displayPreDeduct(device, response: pre),
                 channel: .cloud,
                 autoDisConSec: autoDisCon
             )
@@ -385,7 +387,7 @@ final class ShowerFlow: ObservableObject {
                 protocolType: "",
                 randomNumber: "",
                 startedAt: startDate(sn),
-                preDeductMoney: pre,
+                preDeductMoney: displayPreDeduct(device, response: pre),
                 channel: .cloud,
                 autoDisConSec: 0
             )
@@ -513,7 +515,7 @@ final class ShowerFlow: ObservableObject {
                     protocolType: st.protocolType,
                     randomNumber: st.randomNumber,
                     startedAt: startDate(sn),
-                    preDeductMoney: rec?.preDeduct,
+                    preDeductMoney: displayPreDeduct(device),
                     channel: .ble,
                     autoDisConSec: 0
                 )
@@ -605,7 +607,7 @@ final class ShowerFlow: ObservableObject {
             protocolType: st.protocolType,
             randomNumber: st.randomNumber,
             startedAt: startDate(sn),
-            preDeductMoney: rateResp.data?.preDeductYuan,
+            preDeductMoney: displayPreDeduct(device, response: rateResp.data?.preDeductYuan),
             channel: .ble,
             autoDisConSec: rateResp.data?.autoDisConTime ?? 0
         )
@@ -972,9 +974,9 @@ final class ShowerFlow: ObservableObject {
     func remainingText(_ order: ActiveOrder) -> String {
         let pre = order.preDeductMoney ?? 0
         if let consumed = liveConsumed {
-            return String(format: "%.2f", max(0, pre - consumed))
+            return MoneyFormat.format(max(0, pre - consumed))
         }
-        return pre > 0 ? String(format: "%.2f", pre) : "0.00"
+        return MoneyFormat.format(max(0, pre))
     }
 
     /// 结算完成：记金额、弹提示（或自动关停弹窗）
@@ -1188,8 +1190,17 @@ final class ShowerFlow: ObservableObject {
 
     // MARK: - 其它
 
+    private func displayPreDeduct(_ device: DeviceInfo, response: Double? = nil) -> Double {
+        let sn = device.snCode ?? ""
+        return PreDeductPolicy.resolve(device: device.withholdYuan,
+            savedOrder: ActiveOrderStore.find(sn)?.preDeduct,
+            lastDevice: !sn.isEmpty && sn == Prefs.lastDeviceSnCode ? Prefs.lastDeviceWithholdMoney : nil,
+            response: response)
+    }
+
     private func rememberDevice(_ device: DeviceInfo) {
         guard workScope.isCurrent else { return }
+        let preDeduct = displayPreDeduct(device)
         Prefs.lastDeviceName = device.displayName
         Prefs.lastDeviceMac = device.macAddress ?? device.snCode ?? ""
         Prefs.lastDeviceSnCode = device.snCode ?? ""
@@ -1198,7 +1209,7 @@ final class ShowerFlow: ObservableObject {
         // 少了它们，App 重启后恢复出来的卡片会显示空白名和 ¥0.00
         Prefs.lastDeviceRawName = device.deviceName ?? ""
         Prefs.lastDeviceTypeName = device.typeLabel
-        Prefs.lastDeviceWithholdMoney = device.withholdYuan ?? 0
+        Prefs.lastDeviceWithholdMoney = preDeduct
     }
 
     /// 从首页「使用中的设备」卡片恢复订单 —— 对照 Android `restoreShowerScreen`。
@@ -1560,7 +1571,7 @@ final class ShowerFlow: ObservableObject {
             deviceName: info.displayName,
             deviceMac: info.macAddress ?? snCode,
             deviceEmoji: info.typeEmoji,
-            preDeduct: info.withholdYuan ?? 0,
+            preDeduct: displayPreDeduct(info, response: q.data?.preDeductMoney?.value),
             // 此入口已查到云端订单；仍尊重已知蓝牙标记，避免误用云端轮询。
             isBluetooth: info.needsBluetoothControl || Prefs.isBleDevice(snCode)
         ))

@@ -214,7 +214,7 @@ struct WalletScreenView: View {
                 }
                 Spacer(minLength: 12)
                 VStack(alignment: .trailing, spacing: 6) {
-                    Text("-¥ \(bill.consumeMoney ?? "0")")
+                    Text("-¥ \(bill.yuan.map { MoneyFormat.format($0) } ?? "—")")
                         .font(.system(size: 16, weight: .bold))
                         .foregroundStyle(colors.danger)
 
@@ -250,7 +250,7 @@ struct WalletScreenView: View {
                 VStack(spacing: 0) {
                     DetailRowView(label: "设备名", value: dto.displayNamePart)
                     DetailRowView(label: "设备类型", value: dto.deviceTypeLabel)
-                    DetailRowView(label: "消费金额", value: "-¥ \(dto.consumeMoney ?? "0")")
+                    DetailRowView(label: "消费金额", value: "-¥ \(dto.yuan.map { MoneyFormat.format($0) } ?? "—")")
                     DetailRowView(label: "消费时间", value: String((dto.consumeDate ?? "").prefix(19)))
                     DetailRowView(label: "订单号", value: dto.orderId ?? "-")
                 }

@@ -118,7 +118,10 @@ import WidgetKit
                 infos[sn]?.running = true
                 infos[sn]?.orderNo = order.orderNo
                 infos[sn]?.startedAt = Prefs.startedAt(sn)
-                infos[sn]?.preDeduct = order.preDeduct
+                infos[sn]?.preDeduct = PreDeductPolicy.resolve(
+                    device: deviceInfos[sn]?.withholdYuan,
+                    savedOrder: order.preDeduct,
+                    lastDevice: sn == next.lastDevice ? Prefs.lastDeviceWithholdMoney : nil)
             }
         }
         next.devices = infos.values.sorted { $0.id < $1.id }

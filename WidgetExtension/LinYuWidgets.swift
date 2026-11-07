@@ -192,10 +192,10 @@ struct LinYuWidgetView: View {
                 Text(Date(timeIntervalSince1970: Double(device.startedAt) / 1000), style: .timer)
                     .font(.system(size: 24, weight: .medium)).monospacedDigit()
                     .multilineTextAlignment(.center).frame(maxWidth: .infinity, alignment: .center)
-                Text("预扣 · ¥\(device.preDeduct, specifier: "%.2f")").font(.system(size: 10))
+                Text("预扣 · \(MoneyFormat.withSymbol(device.preDeduct))").font(.system(size: 10))
             } else {
                 Text("上次消费").font(.system(size: 10.5)).foregroundStyle(.white.opacity(0.65))
-                Text((device?.lastConsume ?? 0) > 0 ? String(format: "¥ %.2f", device!.lastConsume) : "¥ —")
+                Text((device?.lastConsume ?? 0) > 0 ? "¥ \(MoneyFormat.format(device!.lastConsume))" : "¥ —")
                     .font(.system(size: 22, weight: .medium)).minimumScaleFactor(0.7).lineLimit(1)
             }
           }.frame(maxWidth: .infinity, maxHeight: .infinity).padding(8).modifier(Glass())

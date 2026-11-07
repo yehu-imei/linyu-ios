@@ -54,6 +54,7 @@ struct DataStoreRegression {
 
         SettlementRegression.run(check: check)
         CoreLogicRegression.run(check: check)
+        MoneyDisplayRegression.run(check: check)
         await DeviceControlRegression.run(check: check)
         await ParityBatchRegression.run(check: check)
         await DeviceAddressRegression.run(check: check)

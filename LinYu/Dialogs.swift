@@ -287,7 +287,7 @@ struct ShowerErrorDialogView: View {
                                 .foregroundStyle(colors.warning)
                                 .padding(.top, 12)
                             ForEach(shownBills) { bill in
-                                Text("· ¥\(bill.consumeMoney ?? "?")   \(String((bill.consumeDate ?? "").prefix(16)))")
+                                Text("· \(MoneyFormat.withSymbol(bill.yuan))   \(String((bill.consumeDate ?? "").prefix(16)))")
                                     .font(.system(size: 12))
                                     .foregroundStyle(colors.textSecondary)
                                     .padding(.top, 4)
