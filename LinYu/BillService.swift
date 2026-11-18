@@ -44,6 +44,13 @@ enum BillService {
                 return results
             }
             guard SessionWork.isCurrent(defaultProject.generation) else { throw CancellationError() }
+            if isDefault, responses.isEmpty, let legacyDefault {
+                history.bills += legacyDefault
+                history.defaultBills = legacyDefault
+                history.hasDefault = true
+                history.hadFailure = true
+                continue
+            }
             for month in months {
                 let owner = BillHistoryCache.monthOwner(project, month: month)
                 let rows: [BillDTO]?
