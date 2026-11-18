@@ -23,12 +23,16 @@ enum DeviceAddress {
 enum DeviceLookup {
     static func load(_ address: String) async throws -> DeviceInfo? {
         guard !address.isEmpty else { return nil }
+        let generation = Session.shared.requestGeneration
         for candidate in DeviceAddress.lookupVariants(address) {
             try Task.checkCancellation()
             let raw = try await ApiClient.get("/device/info/mac", query: ["macAddress": candidate], tag: "deviceInfo")
             let response = try ApiClient.decode(DeviceInfo.self, from: raw, path: "deviceInfo")
             guard response.success else { return nil }
-            if let info = response.data { return info }
+            if let info = response.data {
+                await ProjectAuthRepository.remember(info, generation: generation)
+                return info
+            }
         }
         return nil
     }

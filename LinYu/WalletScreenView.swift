@@ -21,25 +21,47 @@ struct WalletScreenView: View {
     @State private var showEditDialog = false
     @State private var editValue = ""
     @State private var trendEnabled = Prefs.trendEnabled
+    @State private var showWalletBalance = false
 
     /// 列表只显示最近 20 次（对照 Android 的 `billList = all.take(20)`）
     private var recent: [BillDTO] { Array(store.bills.prefix(20)) }
 
-    private var displayBalance: Double? {
-        if BalanceEstimator.hasRealBalance { return BalanceEstimator.realBalance }
-        return store.loaded ? BalanceEstimator.estimate(store.bills) : nil
+    private var balanceTitle: String { showWalletBalance ? "趣智校园余额" : "一卡通余额" }
+    private var selectedBalance: Double? { showWalletBalance ? BalanceEstimator.walletYuan : BalanceEstimator.campusYuan }
+    private var canEstimate: Bool { !showWalletBalance && !BalanceEstimator.hasRealBalance }
+    private var estimate: Double? {
+        guard canEstimate, store.balanceBillsLoaded, !Prefs.manualBalance.isEmpty else { return nil }
+        return BalanceEstimator.estimate(store.balanceBills)
+    }
+    private var displayBalance: Double? { selectedBalance ?? estimate }
+    private var balanceSource: String {
+        if estimate != nil { return "仅通过初始金额和账单进行估算，并非真实余额" }
+        if showWalletBalance {
+            return selectedBalance == nil ? "暂未获取到趣智校园余额" : "来自趣智校园账户的实时余额"
+        }
+        return selectedBalance == nil ? "暂未获取到一卡通余额" : "来自校园卡账户的实时余额"
     }
 
     var body: some View {
         ZStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
-                    // 标题按**钱在哪**写：一卡通 → 「一卡通余额」，钱包 → 「趣智校园余额」
-                    Text(BalanceEstimator.title)
-                        .font(.system(size: 22, weight: .bold))
-                        .foregroundStyle(colors.textPrimary)
+                    Button { showWalletBalance.toggle() } label: {
+                        HStack(spacing: 6) {
+                            Text(balanceTitle)
+                                .font(.system(size: 22, weight: .bold))
+                                .foregroundStyle(colors.textPrimary)
+                            Image(systemName: "arrow.left.arrow.right")
+                                .font(.system(size: 14))
+                                .foregroundStyle(colors.textSecondary)
+                                .accessibilityHidden(true)
+                        }
                         .frame(height: PageLayout.titleHeight)
-                        .frame(height: PageLayout.headerHeight, alignment: .top)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(InstantButtonStyle())
+                    .accessibilityHint(showWalletBalance ? "查看一卡通余额" : "查看趣智校园余额")
+                    .frame(height: PageLayout.headerHeight, alignment: .top)
 
                     balanceCard
                         .padding(.top, 16)
@@ -81,8 +103,8 @@ struct WalletScreenView: View {
                             ForEach(recent) { bill in
                                 billCard(
                                     bill,
-                                    unpaid: bill.consumeDate.map { unpaidDates.contains($0) } ?? false,
-                                    deducting: deduct.deductingConsumeDate == bill.consumeDate,
+                                    unpaid: store.isDefaultBill(bill) && (bill.consumeDate.map { unpaidDates.contains($0) } ?? false),
+                                    deducting: store.isDefaultBill(bill) && deduct.deductingConsumeDate == bill.consumeDate,
                                     onDeduct: { pendingDeduct = bill }
                                 )
                             }
@@ -136,9 +158,14 @@ struct WalletScreenView: View {
         guard let id = widgets.pendingBillID else { return }
         widgets.pendingBillID = nil
         guard !id.isEmpty else { return }
-        if let bill = store.bills.first(where: { $0.id == id }) { detailBill = bill; return }
+        func matchingBill() -> BillDTO? {
+            if let exact = store.bills.first(where: { $0.id == id }) { return exact }
+            let oldMatches = store.balanceBills.filter { $0.orderId == id }
+            return oldMatches.count == 1 ? oldMatches[0] : nil
+        }
+        if let bill = matchingBill() { detailBill = bill; return }
         await store.reload()
-        if let bill = store.bills.first(where: { $0.id == id }) { detailBill = bill }
+        if let bill = matchingBill() { detailBill = bill }
         else { flow.toast = "未找到这笔账单，请刷新" }
     }
 
@@ -151,7 +178,7 @@ struct WalletScreenView: View {
                 Spacer()
                 // 拿到真实余额后「手动填写」就藏起来：估算值会被真实值覆盖，
                 // 摆在那儿只会让人以为填了能改数字
-                if !BalanceEstimator.hasRealBalance {
+                if canEstimate {
                     Button {
                         // 预填**当前显示的余额**，不是上次填的初始值
                         editValue = displayBalance.map { MoneyFormat.format($0) }
@@ -173,7 +200,7 @@ struct WalletScreenView: View {
                 .foregroundStyle(colors.textPrimary)
                 .padding(.top, 4)
 
-            Text(BalanceEstimator.sourceText)
+            Text(balanceSource)
                 .font(.system(size: 11))
                 .foregroundStyle(colors.textSecondary)
                 .padding(.top, 8)
@@ -291,6 +318,7 @@ struct WalletScreenView: View {
     /// ⚠️ 结果未知**不能说失败**：请求可能已经发出去了，
     /// 说失败就是在鼓励用户再点一次 → 扣两次。
     private func requestDeduct(_ bill: BillDTO) async {
+        guard store.isDefaultBill(bill) else { return }
         guard let date = bill.consumeDate, !date.isEmpty else {
             flow.toast = "账单信息不完整，无法代扣"
             return

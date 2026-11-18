@@ -31,6 +31,7 @@ final class ThemeReveal: ObservableObject {
         let origin: CGPoint
         /// 旧主题的底色 —— 遮罩要填的就是它
         let coverColor: Color
+        let startRadius: CGFloat
         let maxRadius: CGFloat
     }
 
@@ -44,12 +45,12 @@ final class ThemeReveal: ObservableObject {
     /// 切主题并播放揭示动画。
     ///
     /// - Parameters:
-    ///   - origin: 点击位置（全屏坐标）
+    ///   - anchor: 按钮范围（全屏坐标）
     ///   - coverColor: **旧**主题背景色
     ///   - screen: 屏幕尺寸（用来算盖满全屏所需的半径）
     ///   - apply: 真正执行主题切换
     func toggle(
-        origin: CGPoint,
+        anchor: CGRect,
         coverColor: Color,
         screen: CGSize,
         apply: () -> Void
@@ -59,16 +60,22 @@ final class ThemeReveal: ObservableObject {
 
         let width = max(screen.width, 1)
         let height = max(screen.height, 1)
+        let origin = CGPoint(x: anchor.midX, y: anchor.midY)
+        let startRadius = hypot(anchor.width, anchor.height) / 2
         // 半径取到「最远的那个角」，保证结束时一定盖满
         let dx = max(origin.x, width - origin.x)
         let dy = max(origin.y, height - origin.y)
-        let maxRadius = sqrt(dx * dx + dy * dy)
+        let maxRadius = max(startRadius, hypot(dx, dy))
 
-        apply()
-        animation = Animation(origin: origin, coverColor: coverColor, maxRadius: maxRadius)
-        progress = 0
+        var transaction = Transaction(animation: nil)
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            apply()
+            animation = Animation(origin: origin, coverColor: coverColor, startRadius: startRadius, maxRadius: maxRadius)
+            progress = 0
+        }
 
-        // 让遮罩先以「半径 0」画一帧，再启动扩散 —— 否则首帧会看到旧主题整屏闪一下
+        // 第一帧先露出主题按钮，让更新后的太阳或月亮立刻可见。
         DispatchQueue.main.async {
             withAnimation(.timingCurve(0.4, 0, 0.2, 1, duration: Self.duration)) {
                 self.progress = 1
@@ -85,15 +92,15 @@ final class ThemeReveal: ObservableObject {
 struct ThemeRevealOverlay: View {
     let animation: ThemeReveal.Animation
     let progress: CGFloat
-    let screen: CGSize
 
     var body: some View {
         let diameter = animation.maxRadius * 2
+        let initialScale = animation.startRadius / animation.maxRadius
         ZStack {
             animation.coverColor
             Circle()
                 .frame(width: diameter, height: diameter)
-                .scaleEffect(max(progress, 0.0001))
+                .scaleEffect(initialScale + (1 - initialScale) * progress)
                 .position(x: animation.origin.x, y: animation.origin.y)
                 .blendMode(.destinationOut)
         }

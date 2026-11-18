@@ -18,6 +18,8 @@ final class AppDataStore: ObservableObject {
 
     /// 完整账单（最近 3 个月），趋势图用
     @Published private(set) var bills: [BillDTO] = []
+    @Published private(set) var balanceBills: [BillDTO] = []
+    @Published private(set) var balanceBillsLoaded = false
     @Published private(set) var loading = false
     /// 是否已经成功加载过一次。
     ///
@@ -69,6 +71,11 @@ final class AppDataStore: ObservableObject {
     private let profileOwner: String
     private let currentProfileOwner: () -> String
 
+    func isDefaultBill(_ bill: BillDTO) -> Bool {
+        (bill.sourceProjectId == nil && bill.sourceAccountId == nil) ||
+            (bill.sourceProjectId == Session.shared.projectId && bill.sourceAccountId == Session.shared.accountId)
+    }
+
     init(profileOwnerProvider: @escaping () -> String = {
         let session = Session.shared
         return session.isLoggedIn ? session.projectId + ":" + session.accountId : ""
@@ -81,6 +88,8 @@ final class AppDataStore: ObservableObject {
         }
         if let cached = BillHistoryCache.read(owner: profileOwner) {
             bills = cached
+            balanceBills = cached
+            balanceBillsLoaded = true
             loaded = true
         }
         if let cached = ProfileCache.read(owner: profileOwner) {
@@ -275,14 +284,19 @@ final class AppDataStore: ObservableObject {
             await BillService.refreshBalances()
             guard self.sessionIsCurrent else { return }
             do {
-                let result = try await BillService.loadHistoryChecked()
+                let result = try await BillService.loadMergedHistory(legacyDefault: self.balanceBillsLoaded ? self.balanceBills : nil)
                 try Task.checkCancellation()
                 guard self.sessionIsCurrent else { return }
-                self.bills = result
-                self.loaded = true
-                self.billsRefreshed = true
-                BillHistoryCache.save(result, owner: self.profileOwner)
-                self.onBillsLoaded?(result)
+                self.bills = result.bills
+                self.balanceBills = result.defaultBills
+                self.loaded = result.hasDefault || !result.bills.isEmpty
+                self.balanceBillsLoaded = result.hasDefault
+                self.billsRefreshed = !result.hadFailure
+                if result.hasDefault { BillHistoryCache.save(result.defaultBills, owner: self.profileOwner) }
+                if result.hadFailure {
+                    self.billsError = self.bills.isEmpty ? "获取账单失败，请重试" : "部分账单暂未更新，点此重试"
+                }
+                self.onBillsLoaded?(result.fresh)
             } catch {
                 guard self.sessionIsCurrent else { return }
                 self.billsError = "获取账单失败，请重试"

@@ -41,6 +41,7 @@ struct AlertCard<Content: View, Actions: View>: View {
     var titleAlign: TextAlignment = .center
     /// 标题下面那行小字（如位置）
     var subtitle: String? = nil
+    var titleTrailing: AnyView? = nil
     var cornerRadius: CGFloat = 28
     var contentSpacing: CGFloat = 16
     var actionSpacing: CGFloat = 20
@@ -61,6 +62,7 @@ struct AlertCard<Content: View, Actions: View>: View {
                         .font(.system(size: 20, weight: .bold))
                         .foregroundStyle(colors.textPrimary)
                         .multilineTextAlignment(titleAlign)
+                    if let titleTrailing { titleTrailing }
                 }
                 if let subtitle, !subtitle.isEmpty {
                     Text(subtitle)
@@ -156,6 +158,24 @@ struct DetailRowView: View {
 
 // MARK: - 设备详情弹窗（对照 DeviceDetailDialog.kt）
 
+struct HomeFavoriteButton: View {
+    @Environment(\.appColors) private var colors
+    let selected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "star.fill")
+                .font(.system(size: 16, weight: .medium))
+                .foregroundStyle(selected ? colors.accent : colors.textSecondary)
+                .frame(width: 36, height: 36)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(InstantButtonStyle())
+        .accessibilityLabel(selected ? "取消收藏" : "收藏设备")
+    }
+}
+
 struct DeviceDetailDialogView: View {
     @Environment(\.appColors) private var colors
     let device: DeviceInfo
@@ -163,10 +183,12 @@ struct DeviceDetailDialogView: View {
     let isOwner: Bool
     let onDismiss: () -> Void
     let onConfirm: () -> Void
+    let isFavorite: Bool
+    let onFavorite: () -> Void
 
     private var typeLabel: String {
         if device.isDrinkingWater {
-            return device.isHotWater ? "饮水（热水）" : "饮水（冷水）"
+            return device.waterTemperature.map { "饮水（\($0)）" } ?? "饮水"
         }
         return device.typeName == "洗手台" ? "洗漱" : "沐浴"
     }
@@ -181,7 +203,8 @@ struct DeviceDetailDialogView: View {
                 title: typeLabel,
                 titleEmoji: device.typeEmoji,
                 titleAlign: .center,
-                subtitle: device.displayName
+                subtitle: device.displayName,
+                titleTrailing: AnyView(HomeFavoriteButton(selected: isFavorite, action: onFavorite))
             ) {
                 VStack(spacing: 0) {
                     DetailRowView(label: "类型", value: device.typeName)

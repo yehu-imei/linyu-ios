@@ -65,6 +65,13 @@ struct DeviceInfo: Decodable {
     /// 服务端不返回 `isBle` 时只能当普通表试一次，失败后再问用户要不要改用蓝牙。
     var needsBluetoothControl: Bool { isBle == true }
 
+    /// 正向识别饮水机。该分类也用于阻止缺项目资料的饮水机借用默认账户。
+    var isDrinkingWater: Bool {
+        if bigTypeId == 5 || bigTypeName?.contains("饮") == true { return true }
+        let name = deviceName ?? ""
+        return ["饮水", "直饮", "开水机", "开水器", "冷水"].contains { name.contains($0) }
+    }
+
     // displayName / typeEmoji / statusText 等展示逻辑在 DeviceInfoDisplay.swift
     // （那边是逐条对照 Android DeviceModels.kt 的完整实现，别在这里重复）
 
@@ -148,11 +155,28 @@ struct BluetoothUploadData: Decodable {
 struct UsingOrderData: Decodable {
     let orderNo: String?
     let isOwner: Bool?
+    let snCode: String?
     let expireTimes: Int?
     /// ⚠️ 实测（2026-10-22 projectId=905）这个字段返回的是**数字** `0`，
     /// 声明成 String 会让整个响应解码失败 —— 日志里表现为
     /// 「解析失败 queryUsing」，于是关阀后的确认永远拿不到结果。
     let preDeductMoney: AnyNumber?
+}
+
+extension APIResponse where T == UsingOrderData {
+    var deviceInUse: Bool? {
+        if errorCode == 307 || (success && data?.orderNo != nil) { return true }
+        return success ? false : nil
+    }
+
+    func ownedOrderNo(snCode: String) -> String? {
+        guard deviceInUse == true, let data, data.isOwner == true,
+              let order = data.orderNo?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !order.isEmpty else { return nil }
+        if let identifier = data.snCode, !identifier.isEmpty,
+           identifier.caseInsensitiveCompare(snCode) != .orderedSame { return nil }
+        return order
+    }
 }
 
 // MARK: - 钱包 / 账单
@@ -186,22 +210,50 @@ struct CampusUserInfo: Decodable {
 /// `/order/query/account/bill/list` 的一项 —— 外面套一层 `consumeBillDTO`
 struct BillItem: Decodable {
     let consumeBillDTO: BillDTO?
+
+    private enum CodingKeys: String, CodingKey {
+        case consumeBillDTO, rechargeBillDTO, refundBillDTO, monthCardBillDTO, laundryBillDTO
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        for kind: CodingKeys in [.rechargeBillDTO, .refundBillDTO, .monthCardBillDTO, .laundryBillDTO] {
+            if values.contains(kind), try values.decodeNil(forKey: kind) == false {
+                consumeBillDTO = nil
+                return
+            }
+        }
+        consumeBillDTO = try values.decodeIfPresent(BillDTO.self, forKey: .consumeBillDTO)
+    }
 }
 
 struct BillDTO: Codable, Identifiable {
     /// 账单**序号**（7 位），和 orderNo 不是一回事
     let orderId: String?
-    let consumeDate: String?
-    let consumeMoney: String?
-    let description: String?
+    var consumeDate: String?
+    var consumeMoney: String?
+    var description: String?
     /// 下单时返回的 20 位 orderNo（关阀用）
     let orderNo: String?
     let preDeductMoney: String?
     let deviceSnCode: String?
+    var sourceProjectId: String? = nil
+    var sourceAccountId: String? = nil
+    var dealDate: String? = nil
+    var createTime: String? = nil
+    var deviceDescription: String? = nil
+    var deviceTypeName: String? = nil
+    var thirdTradeMoney: String? = nil
 
-    var id: String { orderId ?? consumeDate ?? UUID().uuidString }
+    var id: String {
+        if let sourceProjectId, let sourceAccountId {
+            return [sourceProjectId, sourceAccountId, orderNo ?? orderId ?? rawNamePart,
+                    consumeDate ?? "", deviceSnCode ?? ""].joined(separator: ":")
+        }
+        return orderId ?? consumeDate ?? orderNo ?? rawNamePart
+    }
 
-    var yuan: Double? { consumeMoney.flatMap(Double.init) }
+    var yuan: Double? { consumeMoney.flatMap(Double.init).flatMap { $0.isFinite ? $0 : nil } }
 
     /// 冒号之后的**原始**设备名。
     ///
@@ -220,8 +272,11 @@ struct BillDTO: Codable, Identifiable {
 
     /// 是否饮水机账单（对照 Android：对**完整 description** 判，不是截取后的名字）
     var isDrinkingWaterBill: Bool {
-        let d = description ?? ""
-        return d.contains("饮水") || d.contains("直饮") || d.contains("冷水")
+        let markers = ["饮水", "直饮", "冷水", "开水机", "开水器"]
+        let hasMarker = [description, deviceTypeName, deviceDescription].compactMap { $0 }.contains { value in
+            markers.contains { value.contains($0) }
+        }
+        return hasMarker || ["开水", "温水"].contains { rawNamePart.hasPrefix($0) || deviceTypeName == $0 }
     }
 
     /// 设备类型标签：饮水机 / 洗手台热水器 / 卫生间热水器

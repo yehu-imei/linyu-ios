@@ -7,7 +7,7 @@ import Foundation
 /// | | 云端 `tcpDevice/*` | 蓝牙 `bluetooth/*` |
 /// |---|---|---|
 /// | 谁下发指令 | 服务端推给设备（要求设备自带 4G） | **手机当网关**，阀由本机写进设备 |
-/// | 关阀 | 服务端受理即算成功 | 必须 0x22 设备确认 |
+/// | 关阀 | 受理后复核订单已结束 | 必须 0x22 设备确认 |
 /// | 结算 | 服务端自己算，App 只是查询 | App 采集 + 上传 |
 ///
 /// 对蓝牙表调 `tcpDevice` 必然回 `306 设备不在线` —— 这是分流的意义。
@@ -32,21 +32,19 @@ enum CloudShower {
     }
 
     /// 开阀。`budgetMs` 是轮询确认的总预算（Android 也是 6 秒）。
-    static func open(snCode: String, budgetMs: Int = 6_000, allowNewOrder: Bool = true, expectedOrderNo: String? = nil) async -> OpenOutcome {
+    static func open(snCode: String, budgetMs: Int = 6_000, allowNewOrder: Bool = true,
+                     expectedOrderNo: String? = nil, project: ProjectAuthContext? = nil) async -> OpenOutcome {
         let generation = SessionWork.generation ?? Session.shared.requestGeneration
         guard SessionWork.isCurrent(generation) else { return .failed("登录状态已变化") }
         guard !snCode.isEmpty else { return .failed("设备信息不完整") }
         let deadline = Date().addingTimeInterval(Double(budgetMs) / 1000.0)
 
         // ① 设备上已有订单 → 直接恢复，不再下发
-        if let using = try? await queryUsing(snCode: snCode) {
+        do {
+            let using = try await queryUsing(snCode: snCode, project: project)
             guard SessionWork.isCurrent(generation) else { return .failed("登录状态已变化") }
-            if using.errorCode == 307 || (using.success && using.data?.orderNo != nil) {
-                // ⚠️ 有订单 ≠ 是你的订单，先看 isOwner
-                if using.data?.isOwner == false {
-                    return .inUseByOthers
-                }
-                let orderNo = using.data?.orderNo ?? ""
+            if using.deviceInUse == true {
+                guard let orderNo = using.ownedOrderNo(snCode: snCode) else { return .inUseByOthers }
                 guard !ActiveOrderStore.wasFinished(snCode: snCode, orderNo: orderNo) else {
                     return .failed("设备已关闭，请稍后重试")
                 }
@@ -57,7 +55,12 @@ enum CloudShower {
                 AppLog.shared.i("设备 \(snCode) 已有进行中订单 \(orderNo)，恢复")
                 return .resumed(orderNo: orderNo, preDeduct: pre)
             }
-            if using.success { ActiveOrderStore.confirmIdle(snCode) }
+            guard using.deviceInUse == false else {
+                return .failed(using.displayMessage ?? "查询设备状态失败，请重试")
+            }
+            ActiveOrderStore.confirmIdle(snCode)
+        } catch {
+            return .failed(LoginFeedback.message(error, fallback: "查询设备状态失败，请重试"))
         }
 
         // 恢复/通知不是开新阀的授权：查询失败或已无订单时不能申请费率。
@@ -70,6 +73,7 @@ enum CloudShower {
             let data = try await ApiClient.post(
                 "/order/tcpDevice/downRate/rateOrder",
                 form: ["xfModel": "0", "snCode": snCode],
+                project: project,
                 tag: "downRate"
             )
             // ⚠️ 必须 decodeShell：业务失败（尤其是 306「设备不在线」）要能看得到 errorCode，
@@ -92,7 +96,7 @@ enum CloudShower {
         var opened = false
         var autoDisCon = rateResp.data?.autoDisConTime ?? 0
         var confirmedOrderNo = rateResp.data?.orderNo ?? ""
-        var consumeDate = rateResp.data?.consumeDate ?? ""
+        let consumeDate = rateResp.data?.consumeDate ?? ""
 
         for i in 0 ..< 9 {
             if i > 0 && Date() >= deadline {
@@ -103,9 +107,10 @@ enum CloudShower {
             try? await Task.sleep(nanoseconds: 700_000_000)
             guard SessionWork.isCurrent(generation) else { return .failed("登录状态已变化") }
 
-            guard let r = try? await downRateResult(snCode: snCode) else { continue }
+            guard let r = try? await downRateResult(snCode: snCode, project: project) else { continue }
             guard SessionWork.isCurrent(generation) else { return .failed("登录状态已变化") }
-            if r.success, let d = r.data, d.looksOpened {
+            if r.success, let d = r.data, d.looksOpened,
+               d.snCode?.isEmpty != false || d.snCode?.caseInsensitiveCompare(snCode) == .orderedSame {
                 opened = true
                 if let no = d.orderNo, !no.isEmpty { confirmedOrderNo = no }
                 if let t = d.autoDisConTime, t > 0 { autoDisCon = t }
@@ -135,7 +140,7 @@ enum CloudShower {
         case unconfirmed(String)
     }
 
-    static func close(snCode: String, orderNo: String) async -> CloseOutcome {
+    static func close(snCode: String, orderNo: String, project: ProjectAuthContext? = nil) async -> CloseOutcome {
         let generation = SessionWork.generation ?? Session.shared.requestGeneration
         guard SessionWork.isCurrent(generation) else { return .unconfirmed("登录状态已变化") }
         guard !snCode.isEmpty else { return .failed("设备信息不完整") }
@@ -143,7 +148,15 @@ enum CloudShower {
         // orderNo 必须**在关阀之前**敲定：关阀成功后订单就没了，queryUsing 再也问不出来
         var no = orderNo
         if no.isEmpty {
-            no = (try? await queryUsing(snCode: snCode))?.data?.orderNo ?? ""
+            guard let using = try? await queryUsing(snCode: snCode, project: project) else {
+                return .unconfirmed("当前订单未确认，请稍后重试")
+            }
+            if using.deviceInUse == false { return .closed }
+            guard let owned = using.ownedOrderNo(snCode: snCode) else {
+                return .unconfirmed("当前订单未确认，请稍后重试")
+            }
+            no = owned
+            ActiveOrderStore.updateOrderNo(snCode: snCode, orderNo: owned)
         }
 
         let resp: APIResponse<EmptyData>
@@ -152,32 +165,33 @@ enum CloudShower {
             let data = try await ApiClient.post(
                 "/order/tcpDevice/closeOrder",
                 form: ["snCode": snCode, "orderNo": no],
+                project: project,
                 tag: "closeOrder"
             )
             resp = try ApiClient.decodeShell(EmptyData.self, from: data, path: "closeOrder")
         } catch {
             // 请求本身失败 → 没有任何证据。再问一次服务端还开着没有
             guard SessionWork.isCurrent(generation) else { return .unconfirmed("登录状态已变化") }
-            let running = await orderRunning(snCode: snCode)
-            if running == true {
-                return .unconfirmed("关闭结果未确认，设备可能仍在出水")
-            }
+            if await orderRunning(snCode: snCode, project: project) == false { return .closed }
             return .unconfirmed("关闭结果未确认，设备可能仍在出水")
         }
 
         if !resp.success {
-            // 服务端已受理 / 已在关闭中，也算成功
+            // “关闭中”或 307 只说明服务端状态，仍需证实空闲。
             if resp.errorCode == 307 || (resp.displayMessage?.contains("已在") == true) {
-                AppLog.shared.i("关阀已受理（\(resp.errorCode ?? -1)）")
-                return .closed
+                if await orderRunning(snCode: snCode, project: project) == false { return .closed }
+                return .unconfirmed("关闭结果未确认，设备可能仍在出水")
             }
             return .failed(resp.displayMessage ?? "关闭失败，请重试")
         }
 
-        // Android closeValve 同样以 closeOrder 受理为关闭判据。
-        // 不把仅供日志的额外查询放在返回前；金额由结算查询负责，结束身份负责过滤延迟状态。
-        AppLog.shared.i("关阀已受理：\(snCode)")
-        return .closed
+        // 与 Android 一样只复核状态，绝不重复发出关阀请求。
+        for attempt in 0..<3 {
+            if attempt > 0 { try? await Task.sleep(nanoseconds: 300_000_000) }
+            guard SessionWork.isCurrent(generation) else { return .unconfirmed("登录状态已变化") }
+            if await orderRunning(snCode: snCode, project: project) == false { return .closed }
+        }
+        return .unconfirmed("关闭结果未确认，设备可能仍在出水")
     }
 
     // MARK: - 结算
@@ -188,10 +202,11 @@ enum CloudShower {
 
     // MARK: - 单接口封装
 
-    static func queryUsing(snCode: String) async throws -> APIResponse<UsingOrderData> {
+    static func queryUsing(snCode: String, project: ProjectAuthContext? = nil) async throws -> APIResponse<UsingOrderData> {
         let data = try await ApiClient.post(
             "/order/tcpDevice/query/rateOrder/using",
             form: ["xfModel": "0", "snCode": snCode],
+            project: project,
             tag: "queryUsing"
         )
         // ⚠️ decodeShell：307（已有订单）是**正常语义**，走 decode 就被吞成 nil，
@@ -199,10 +214,11 @@ enum CloudShower {
         return try ApiClient.decodeShell(UsingOrderData.self, from: data, path: "queryUsing")
     }
 
-    static func downRateResult(snCode: String) async throws -> APIResponse<DownRateResultData> {
+    static func downRateResult(snCode: String, project: ProjectAuthContext? = nil) async throws -> APIResponse<DownRateResultData> {
         let data = try await ApiClient.post(
             "/order/tcpDevice/query/downRateResult",
             form: ["snCode": snCode],
+            project: project,
             tag: "downRateResult"
         )
         return try ApiClient.decodeShell(DownRateResultData.self, from: data, path: "downRateResult")
@@ -212,10 +228,10 @@ enum CloudShower {
     ///
     /// ⚠️ **必须在关阀之前调**：关阀成功后订单就没了，`queryUsing` 再也问不出来。
     /// 所有需要 orderNo 的接口（结算、关阀）都靠它，拿不到就只能退化成按时间窗猜账单。
-    static func resolveOrderNo(snCode: String) async -> String {
+    static func resolveOrderNo(snCode: String, project: ProjectAuthContext? = nil) async -> String {
         let cached = ActiveOrderStore.find(snCode)?.orderNo ?? ""
         if !cached.isEmpty { return cached }
-        let fresh = await queryOrderNo(snCode: snCode)
+        let fresh = await queryOrderNo(snCode: snCode, project: project)
         if !fresh.isEmpty {
             ActiveOrderStore.updateOrderNo(snCode: snCode, orderNo: fresh)
             AppLog.shared.i("orderNo 本地缺失，已从服务端回填：\(fresh)")
@@ -224,19 +240,14 @@ enum CloudShower {
     }
 
     /// 查询设备上进行中订单的订单号，没有则返回空串
-    static func queryOrderNo(snCode: String) async -> String {
-        guard let p = try? await queryUsing(snCode: snCode) else { return "" }
-        if p.errorCode == 307 || (p.success && p.data?.orderNo != nil) {
-            return p.data?.orderNo ?? ""
-        }
-        return ""
+    static func queryOrderNo(snCode: String, project: ProjectAuthContext? = nil) async -> String {
+        let response = try? await queryUsing(snCode: snCode, project: project)
+        return response?.ownedOrderNo(snCode: snCode) ?? ""
     }
 
-    static func orderRunning(snCode: String) async -> Bool? {
-        guard let resp = try? await queryUsing(snCode: snCode) else { return nil }
-        if resp.errorCode == 307 { return true }
-        if resp.success { return resp.data?.orderNo != nil }
-        return nil
+    static func orderRunning(snCode: String, project: ProjectAuthContext? = nil) async -> Bool? {
+        let response = try? await queryUsing(snCode: snCode, project: project)
+        return response?.deviceInUse
     }
 }
 

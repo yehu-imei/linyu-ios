@@ -108,6 +108,7 @@ struct ApiClient {
         _ path: String,
         form: [String: String],
         withAuth: Bool = true,
+        project: ProjectAuthContext? = nil,
         tag: String? = nil
     ) async throws -> Data {
         try Task.checkCancellation()
@@ -115,7 +116,9 @@ struct ApiClient {
         try validateGeneration(generation)
         var fields = form
         if withAuth {
-            for (k, v) in Session.shared.authFields { fields[k] = v }
+            for (k, v) in try authFields(project: project, generation: generation) { fields[k] = v }
+        } else if project != nil {
+            throw ApiError.notLoggedIn
         }
 
         guard let url = URL(string: baseURL + path) else {
@@ -125,7 +128,7 @@ struct ApiClient {
         req.httpMethod = "POST"
         req.setValue("application/x-www-form-urlencoded; charset=UTF-8",
                      forHTTPHeaderField: "Content-Type")
-        applyCommonHeaders(&req)
+        applyCommonHeaders(&req, projectId: project?.projectId)
         req.httpBody = encodeForm(fields)
 
         let bodyPreview = fields
@@ -174,6 +177,7 @@ struct ApiClient {
     static func get(
         _ path: String,
         query: [String: String] = [:],
+        project: ProjectAuthContext? = nil,
         tag: String? = nil
     ) async throws -> Data {
         try Task.checkCancellation()
@@ -183,18 +187,20 @@ struct ApiClient {
             throw ApiError.transport("请求地址无效")
         }
         var items = comps.queryItems ?? []
-        for (k, v) in query { items.append(URLQueryItem(name: k, value: v)) }
+        var fields = query
         if Session.shared.isLoggedIn && !path.contains("verification") {
-            for (k, v) in Session.shared.authQuery {
-                items.append(URLQueryItem(name: k, value: v))
-            }
+            for (k, v) in try authFields(project: project, generation: generation) { fields[k] = v }
+        } else if project != nil {
+            throw ApiError.notLoggedIn
         }
+        items.removeAll { fields[$0.name] != nil }
+        items.append(contentsOf: fields.map { URLQueryItem(name: $0.key, value: $0.value) })
         comps.queryItems = items
 
         guard let url = comps.url else { throw ApiError.transport("请求地址无效") }
         var req = URLRequest(url: url)
         req.httpMethod = "GET"
-        applyCommonHeaders(&req)
+        applyCommonHeaders(&req, projectId: project?.projectId)
 
         let started = Date()
         do {
@@ -231,8 +237,23 @@ struct ApiClient {
         guard generation == Session.shared.requestGeneration else { throw CancellationError() }
     }
 
-    private static func applyCommonHeaders(_ req: inout URLRequest) {
-        let pid = Session.shared.projectId
+    private static func authFields(project: ProjectAuthContext?, generation: UUID) throws -> [String: String] {
+        var fields = Session.shared.authFields
+        if let project {
+            let owner = ProjectAuthContext.owner(userId: fields["userId"] ?? "",
+                                                 projectId: fields["projectId"] ?? "",
+                                                 accountId: fields["accountId"] ?? "")
+            guard Session.shared.isLoggedIn, project.generation == generation, project.owner == owner,
+                  !project.projectId.isEmpty, !project.accountId.isEmpty else { throw CancellationError() }
+            fields["projectId"] = project.projectId
+            fields["accountId"] = project.accountId
+        }
+        try validateGeneration(generation)
+        return fields
+    }
+
+    private static func applyCommonHeaders(_ req: inout URLRequest, projectId: String? = nil) {
+        let pid = projectId ?? Session.shared.projectId
         if !pid.isEmpty && pid != "0" {
             req.setValue(pid, forHTTPHeaderField: "Config-Project")
             req.setValue(configKeys, forHTTPHeaderField: "Config-Keys")

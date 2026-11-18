@@ -22,6 +22,9 @@ struct PendingSettlement: Codable, Equatable {
     /// 事后对账补通知时已经拿不到准确的结束时刻了（服务早收工、界面也退了），
     /// 不存一份的话，补发的通知只能写「消费 ¥x.xx」而写不出用时。
     var elapsedSec: Int = 0
+    var projectId: String? = nil
+    var accountId: String? = nil
+    var authOwner: String? = nil
 }
 
 struct SettlementUpdate: Equatable {
@@ -86,9 +89,25 @@ enum SettlementReconciler {
     static let maxAgeMs: Int64 = 7 * 24 * 60 * 60 * 1000
     static let timeSlackMs: Int64 = 3 * 60 * 1000
 
+    static func match(
+        _ bills: [BillDTO], orderNo: String, deviceName: String, from: Int64, until: Int64
+    ) -> BillDTO? {
+        let number = orderNo.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !number.isEmpty {
+            return bills.first { $0.orderNo == number } ?? bills.first { $0.orderId == number }
+        }
+        guard from > 0, !deviceName.isEmpty else { return nil }
+        let candidates = bills.filter {
+            let time = BalanceEstimator.billTimeMs($0.consumeDate ?? "")
+            return $0.displayNamePart == deviceName && time >= Double(from) && time <= Double(until)
+        }
+        return candidates.count == 1 ? candidates[0] : nil
+    }
+
     static func reconcile(
         pending: [PendingSettlement],
         bills: [BillDTO],
+        defaultProject: ProjectAuthContext? = nil,
         nowMs: Int64 = Int64(Date().timeIntervalSince1970 * 1000)
     ) -> SettlementReconciliation {
         var available = bills
@@ -98,25 +117,23 @@ enum SettlementReconciler {
         for item in pending {
             if nowMs - item.createdAt > maxAgeMs { continue }
 
-            let matched: BillDTO?
-            if !item.orderNo.trimmingCharacters(in: .whitespaces).isEmpty {
-                matched = available.first { $0.orderNo == item.orderNo }
-            } else {
-                let candidates = available.filter { bill in
-                    let billTime = Int64(BalanceEstimator.billTimeMs(bill.consumeDate ?? ""))
-                    return !item.deviceName.isEmpty &&
-                        bill.displayNamePart == item.deviceName &&
-                        billTime >= item.startedAt - timeSlackMs &&
-                        billTime <= item.createdAt + timeSlackMs
-                }
-                matched = candidates.min { a, b in
-                    let ta = BalanceEstimator.billTimeMs(a.consumeDate ?? "")
-                    let tb = BalanceEstimator.billTimeMs(b.consumeDate ?? "")
-                    return abs(ta - Double(item.startedAt)) < abs(tb - Double(item.startedAt))
-                }
+            guard item.authOwner == nil || item.authOwner == defaultProject?.owner else {
+                remaining.append(item)
+                continue
             }
+            let scope = available.filter { bill in
+                if item.projectId != nil || item.accountId != nil {
+                    return item.projectId != nil && item.accountId != nil &&
+                        bill.sourceProjectId == item.projectId && bill.sourceAccountId == item.accountId
+                }
+                return (bill.sourceProjectId == nil && bill.sourceAccountId == nil) ||
+                    (bill.sourceProjectId == defaultProject?.projectId && bill.sourceAccountId == defaultProject?.accountId)
+            }
+            let matched = match(scope, orderNo: item.orderNo, deviceName: item.deviceName,
+                from: item.startedAt > 0 ? item.startedAt - timeSlackMs : 0,
+                until: item.createdAt + timeSlackMs)
 
-            guard let matched, let amount = matched.yuan, amount.isFinite, amount >= 0 else {
+            guard let matched, let amount = matched.yuan, amount > 0 else {
                 remaining.append(item)
                 continue
             }
@@ -124,10 +141,7 @@ enum SettlementReconciler {
             if let i = available.firstIndex(where: { $0.id == matched.id }) {
                 available.remove(at: i)
             }
-            // 金额 0 就不发「补了 X 元」的通知了，但这条记录照样算结清
-            if amount > 0 {
-                updates.append(SettlementUpdate(snCode: item.snCode, amount: amount))
-            }
+            updates.append(SettlementUpdate(snCode: item.snCode, amount: amount))
         }
 
         return SettlementReconciliation(updates: updates, remaining: remaining)

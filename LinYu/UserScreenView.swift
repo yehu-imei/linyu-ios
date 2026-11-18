@@ -175,12 +175,9 @@ struct UserScreenView: View {
 
             Spacer()
 
-            Button(editMode ? "完成" : "编辑") {
+            EditModeButton(isEditing: editMode) {
                 editMode.toggle()
             }
-            .font(.system(size: 14))
-            .foregroundStyle(colors.accent)
-            .buttonStyle(InstantButtonStyle())
 
             if !showBack {
                 Button {
@@ -228,10 +225,9 @@ struct UserScreenView: View {
             isDark.toggle()
             return
         }
-        let origin = CGPoint(x: themeAnchor.midX, y: themeAnchor.midY)
         // ⚠️ coverColor 必须是**切换前**的底色：遮罩填的就是它
         reveal.toggle(
-            origin: origin,
+            anchor: themeAnchor,
             coverColor: colors.background,
             screen: screen
         ) {

@@ -41,23 +41,15 @@ extension DeviceInfo {
 
     // MARK: 类型判定
 
-    /// 是否直饮水机。
-    ///
-    /// ⚠️ **正向判据**：只有明确指向饮水机的证据才算。
-    /// 曾经用「含热水 且 不是热水器/热水表前缀」来判，结果某校的「**热水变**」被
-    /// 误判成饮水机，界面显示绿色「正在接热水」。
-    var isDrinkingWater: Bool {
-        if bigTypeId == 5 { return true }
-        if bigTypeName?.contains("饮") == true { return true }
-        let n = deviceName ?? ""
-        let keywords = ["饮水", "直饮", "开水机", "开水器", "冷水"]
-        return keywords.contains { n.contains($0) }
-    }
-
-    /// 饮水机是否出热水
-    var isHotWater: Bool {
-        let n = deviceName ?? ""
-        return n.contains("热") || n.contains("开水") || (bigTypeName?.contains("热") == true)
+    /// 同 Android：小类名称明确时优先，未知温度保留未确认状态。
+    var waterTemperature: String? {
+        func classify(_ text: String) -> String? {
+            if text.contains("温水") { return "温水" }
+            if text.contains("冷水") || text.contains("凉水") { return "冷水" }
+            if text.contains("热水") || text.contains("开水") { return "热水" }
+            return nil
+        }
+        return classify(smallTypeName ?? "") ?? classify(deviceName ?? "")
     }
 
     var isWashbasin: Bool {
@@ -73,14 +65,20 @@ extension DeviceInfo {
 
     /// 类型 emoji：♨️ / ❄️ / 🪥 / 🚿
     var typeEmoji: String {
-        if isDrinkingWater { return isHotWater ? "♨️" : "❄️" }
+        if isDrinkingWater {
+            switch waterTemperature {
+            case "热水": return "♨️"
+            case "冷水": return "❄️"
+            default: return "🚰"
+            }
+        }
         if isWashbasin { return "🪥" }
         return "🚿"
     }
 
     /// 类型说明（小组件副标题、账单标签用）
     var typeLabel: String {
-        if isDrinkingWater { return isHotWater ? "直饮水机 · 热水" : "直饮水机 · 冷水" }
+        if isDrinkingWater { return waterTemperature.map { "直饮水机 · \($0)" } ?? "直饮水机" }
         if isWashbasin { return "洗手台热水器" }
         return "卫生间热水器"
     }
@@ -93,7 +91,7 @@ extension DeviceInfo {
 
     /// 用水状态文案
     var statusText: String {
-        if isDrinkingWater { return isHotWater ? "正在接热水" : "正在接凉水" }
+        if isDrinkingWater { return waterTemperature.map { "正在接\($0)" } ?? "正在接水" }
         if isWashbasin { return "正在洗漱中" }
         return "正在沐浴中"
     }

@@ -11,8 +11,15 @@ struct DataStoreRegression {
         }
 
         let cacheKey = "billCache_test-school:test-account"
-        UserDefaults.standard.removeObject(forKey: cacheKey)
-        defer { UserDefaults.standard.removeObject(forKey: cacheKey) }
+        func clearCache() {
+            let defaults = UserDefaults.standard
+            defaults.removeObject(forKey: cacheKey)
+            for key in defaults.dictionaryRepresentation().keys where key.hasPrefix("billCache_test-user:test-school:test-account/") {
+                defaults.removeObject(forKey: key)
+            }
+        }
+        clearCache()
+        defer { clearCache() }
         ApiClient.failBills = true
         let retryStore = AppDataStore()
         await retryStore.loadIfNeeded()
@@ -48,9 +55,41 @@ struct DataStoreRegression {
         check(partial.count == 2, "settlement fallback preserves successful months on partial failure")
         let partialStore = AppDataStore()
         await partialStore.loadIfNeeded()
-        check(partialStore.billsError != nil && partialStore.bills.isEmpty,
-              "partial bill responses preserve previous complete disk cache")
+        check(partialStore.billsError != nil && partialStore.bills.count == 2,
+              "partial bill response combines successful months with cache for the failed month")
         ApiClient.failingMonth = nil
+
+        Session.shared.requestGeneration = UUID()
+        ApiClient.getResponses["/user/project/list"] = #"{"success":true,"data":[{"projectId":902,"accountId":102},{"projectId":903,"accountId":103,"userId":222}]}"#
+        ApiClient.billResponsesByProject["902"] = #"{"success":true,"data":[{"consumeBillDTO":{"orderId":"shared","deviceDescription":"温水机-A号","dealDate":"2026-11-10T12:00:00","consumeMoney":"0","thirdTradeMoney":"0.123"}},{"rechargeBillDTO":{"orderId":"add"},"consumeBillDTO":{"orderId":"add","consumeDate":"2026-11-10 12:00:01","consumeMoney":"1.0"}}]}"#
+        ApiClient.billQueries = []
+        let mergedStore = AppDataStore()
+        await mergedStore.loadIfNeeded()
+        let foreign = mergedStore.bills.filter { $0.sourceProjectId == "902" }
+        check(mergedStore.bills.count == 4 && foreign.count == 1 && foreign.first?.yuan == 0.123 &&
+            foreign.first?.isDrinkingWaterBill == true && foreign.first?.consumeDate == "2026-11-10 12:00:00",
+            "合并其他已授权项目的饮水账单，排除充值并补齐金额和时间")
+        check(mergedStore.balanceBills.count == 3 && mergedStore.balanceBills.allSatisfy(mergedStore.isDefaultBill),
+              "余额估算只使用默认项目的完整账单")
+        check(ApiClient.billQueries.filter { $0.project == "902" && $0.account == "102" && $0.type == "0" }.count == 3 &&
+            ApiClient.billQueries.filter { $0.project == "test-school" && $0.account == "test-account" && $0.type == "2" }.count == 3 &&
+            ApiClient.billQueries.count == 6, "默认和授权项目分别使用项目账户和查询类型")
+        ApiClient.getResponses = [:]
+        ApiClient.billResponsesByProject = [:]
+        Session.shared.requestGeneration = UUID()
+
+        Prefs.campusBalance = "2.31"
+        ApiClient.getResponses["/settlement/campus/userInfo"] = #"{"success":false,"errorCode":500,"errorMessage":"暂不可用"}"#
+        await BillService.refreshBalances()
+        check(Prefs.campusBalance == "2.31", "一卡通暂时查询失败保留旧余额")
+        ApiClient.getResponses["/settlement/campus/userInfo"] = #"{"success":false,"errorCode":12,"errorMessage":"无效支付配置"}"#
+        await BillService.refreshBalances()
+        check(Prefs.campusBalance.isEmpty, "确认无一卡通支付配置时清除旧余额")
+        Prefs.campusBalance = "2.31"
+        ApiClient.getResponses["/settlement/campus/userInfo"] = #"{"success":true,"data":{"signStatus":0,"amount":"2.31"}}"#
+        await BillService.refreshBalances()
+        check(Prefs.campusBalance.isEmpty, "一卡通未签约响应清除过期余额")
+        ApiClient.getResponses = [:]
 
         SettlementRegression.run(check: check)
         CoreLogicRegression.run(check: check)
@@ -62,6 +101,7 @@ struct DataStoreRegression {
         await ParityFinishRegression.run(check: check)
         await SharedStoreSessionRegression.run(check: check)
         UserCardLayoutRegression.run(check: check)
+        HomeDeviceLayoutRegression.run(check: check)
         BleCallbackRegression.run(check: check)
         BleReplyBufferRegression.run(check: check)
         await BleSettlementRegression.run(check: check)

@@ -157,6 +157,7 @@ struct LoginView: View {
             if !isSmsMode {
                 Button("使用已保存的密码") {
                     systemPasswords.choose(onFailure: { errorText = $0 }) { user, secret in
+                        guard !busy else { return }
                         phone = user
                         password = secret
                     }
@@ -196,6 +197,7 @@ struct LoginView: View {
             text: $phone,
             systemImage: "phone.fill",
             keyboard: isSmsMode ? .numberPad : .default,
+            contentType: isSmsMode ? .telephoneNumber : .username,
             secured: false
         )
     }
@@ -206,6 +208,7 @@ struct LoginView: View {
             text: $password,
             systemImage: "lock.fill",
             keyboard: .default,
+            contentType: .password,
             secured: true
         )
     }
@@ -217,6 +220,7 @@ struct LoginView: View {
                 text: $smsCode,
                 systemImage: nil,
                 keyboard: .numberPad,
+                contentType: .oneTimeCode,
                 secured: false
             )
             Button {
@@ -246,6 +250,7 @@ struct LoginView: View {
         text: Binding<String>,
         systemImage: String?,
         keyboard: UIKeyboardType,
+        contentType: UITextContentType,
         secured: Bool
     ) -> some View {
         HStack(spacing: 10) {
@@ -269,7 +274,7 @@ struct LoginView: View {
             .textInputAutocapitalization(.never)
             .autocorrectionDisabled()
             // 告诉系统这个框是什么，iOS 的密码自动填充才能识别并回填
-            .textContentType(secured ? .password : (title == "手机号" ? .username : .oneTimeCode))
+            .textContentType(contentType)
 
             if !text.wrappedValue.isEmpty {
                 Button { text.wrappedValue = "" } label: {
@@ -364,10 +369,10 @@ struct LoginView: View {
                     : try await AuthService.login(phone: submittedPhone, password: submittedPassword)
                 // 验证码是一次性的，只有密码登录才存——下次打开自动填好，一键登录
                 if !submittedSmsMode { SavedCredential.save(phone: submittedPhone, password: submittedPassword) }
-                password = ""
-                smsCode = ""
+                // 输入框在退出登录页时统一清空，让 iOS 在验证成功前后看到同一组凭据。
                 AuthService.persist(data, phone: submittedPhone)
             } catch {
+                if submittedSmsMode { smsCode = "" } else { password = "" }
                 errorText = Self.friendly(error)
             }
         }

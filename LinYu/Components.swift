@@ -9,6 +9,34 @@ struct InstantButtonStyle: ButtonStyle {
     }
 }
 
+struct EditModeButton: View {
+    @Environment(\.appColors) private var colors
+    let isEditing: Bool
+    var circleBackground = false
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Group {
+                if isEditing {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 20, weight: .medium))
+                        .foregroundStyle(colors.accent)
+                } else {
+                    VectorIconView(icon: DeviceIcons.editSquare, size: 20, tint: colors.textPrimary, viewport: 32)
+                }
+            }
+            .frame(width: 40, height: 40)
+            .background {
+                if circleBackground { Circle().fill(colors.card) }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(InstantButtonStyle())
+        .accessibilityLabel(isEditing ? "完成编辑" : "编辑")
+    }
+}
+
 enum PageLayout {
     static let titleHeight: CGFloat = 40
     static let headerHeight: CGFloat = 60

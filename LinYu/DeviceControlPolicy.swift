@@ -39,7 +39,7 @@ struct DeviceNotificationTarget: Equatable {
 
     func matchesServerOrder(record: ActiveOrderRecord, orderNo: String?, isOwner: Bool?) -> Bool {
         let expected = self.orderNo.isEmpty ? record.orderNo : self.orderNo
-        return record.snCode == snCode && !expected.isEmpty && orderNo == expected && isOwner != false
+        return record.snCode == snCode && !expected.isEmpty && orderNo == expected && isOwner == true
     }
 
     func isSameSession(as other: DeviceNotificationTarget) -> Bool {

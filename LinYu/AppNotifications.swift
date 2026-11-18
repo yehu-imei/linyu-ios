@@ -209,7 +209,7 @@ final class AppNotifications: NSObject, ObservableObject, UNUserNotificationCent
         let kind: NotificationKind = occupied ? .occupied : .openFailed
         let name = device.count > 14 ? "…" + String(device.suffix(13)) : device
         content.title = occupied ? "设备占用中" : "开阀失败 · " + name
-        content.body = occupied ? name + "正在被他人使用" : LoginFeedback.chineseMessage(reason, fallback: "开启失败，请重试")
+        content.body = occupied ? name + "正在使用中" : LoginFeedback.chineseMessage(reason, fallback: "开启失败，请重试")
         content.userInfo = ["accountKey": Self.accountKey, "kind": kind.rawValue]
         content.threadIdentifier = "linyu.events." + Self.accountKey
         if Prefs.notifyAlert { content.sound = .default }

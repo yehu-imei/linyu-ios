@@ -4,7 +4,7 @@ import Foundation
 ///
 /// ## 字段为什么只有这几个
 ///
-/// 和 Android 一模一样：只有「哪台设备、哪一单、显示成什么、预扣多少」。
+/// 保存设备、订单、预扣、控制通道和对应的项目账户。旧记录按设备台账重新校验。
 /// `protocolType` / `randomNumber` / `consumeDate` 那些**蓝牙会话参数故意不放这里**，
 /// 而是另存 `Prefs.bleSessionJson`（Android 也是这么分的）。
 /// 两端的数据摆放位置保持一致，排查问题时才不会各说各话。
@@ -17,6 +17,9 @@ struct ActiveOrderRecord: Codable, Equatable {
     var preDeduct: Double
     /// 新记录显式保存控制通道；旧记录缺字段时保持未知，由设备台账确认。
     var isBluetooth: Bool? = nil
+    var projectId: String? = nil
+    var projectAccountId: String? = nil
+    var authOwner: String? = nil
 }
 
 /// 活跃订单仓库 —— 逐条对照 Android 的 `data/ActiveOrderRepository.kt`。

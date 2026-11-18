@@ -24,10 +24,20 @@ enum SettlementEngine {
         orderNo: String,
         startTimeMs: Int64,
         snCode: String,
-        deviceName: String = ""
+        deviceName: String = "",
+        project: ProjectAuthContext? = nil
     ) async -> Double? {
         let generation = SessionWork.generation ?? Session.shared.requestGeneration
         guard SessionWork.isCurrent(generation) else { return nil }
+        let route: ProjectAuthContext
+        if let project {
+            route = project
+        } else if let known = try? await ProjectAuthRepository.context(snCode: snCode) {
+            route = known
+        } else {
+            return nil
+        }
+        guard route.generation == generation, SessionWork.isCurrent(generation) else { return nil }
         var sawDefiniteZero = false
 
         if !orderNo.isEmpty {
@@ -35,7 +45,7 @@ enum SettlementEngine {
             //    实测（Android 27 次调用）第 1 轮就是终值，不能让有消费的单子干等。
             probe: for attempt in 0 ..< probeRounds {
                 guard SessionWork.isCurrent(generation) else { return nil }
-                let result = await queryConsumeResult(orderNo: orderNo, snCode: snCode)
+                let result = await queryConsumeResult(orderNo: orderNo, snCode: snCode, project: route)
                 guard SessionWork.isCurrent(generation) else { return nil }
                 switch result {
                 case let .found(v):
@@ -68,7 +78,7 @@ enum SettlementEngine {
                 for attempt in 0 ..< zeroConfirmRounds {
                     try? await Task.sleep(nanoseconds: UInt64(zeroConfirmDelayMs) * 1_000_000)
                     guard SessionWork.isCurrent(generation) else { return nil }
-                    let zeroProbe = await queryConsumeResult(orderNo: orderNo, snCode: snCode)
+                    let zeroProbe = await queryConsumeResult(orderNo: orderNo, snCode: snCode, project: route)
                     guard SessionWork.isCurrent(generation) else { return nil }
                     if case let .found(v) = zeroProbe {
                         Prefs.recordConsume(snCode, amount: v)
@@ -83,7 +93,8 @@ enum SettlementEngine {
 
         // ③ 回退：拉账单列表自己匹配
         guard SessionWork.isCurrent(generation) else { return nil }
-        let probe = await settleFromBillList(orderNo: orderNo, startTimeMs: startTimeMs, snCode: snCode, generation: generation)
+        let probe = await settleFromBillList(orderNo: orderNo, startTimeMs: startTimeMs, snCode: snCode,
+                                             deviceName: deviceName, project: route)
         guard SessionWork.isCurrent(generation) else { return nil }
 
         // 账单列表也没查到金额时，要靠**两种不同的信息**下结论：
@@ -97,16 +108,7 @@ enum SettlementEngine {
         // 第二行是关键：真零消费的单子账单列表里压根不会有这一条（开完水马上停，
         // 一笔账都不产生）。所以「账单里出现过」本身就是**有消费**的证据，
         // 不能因为金额还是 0 就判成没花钱 —— 这正是「有消费却显示无消费」的来源。
-        let resolved: Double?
-        if let amount = probe.amount {
-            resolved = amount
-        } else if probe.sawBill {
-            resolved = nil
-        } else if sawDefiniteZero {
-            resolved = 0.0
-        } else {
-            resolved = nil
-        }
+        let resolved = probe.resolvedAmount(directZero: sawDefiniteZero)
         if probe.sawBill && probe.amount == nil {
             AppLog.shared.w("结算：账单已出现但金额未填，按「未结算完」处理（不判无消费）")
         }
@@ -126,7 +128,10 @@ enum SettlementEngine {
                 createdAt: Int64(Date().timeIntervalSince1970 * 1000),
                 elapsedSec: startTimeMs > 0
                     ? Int((Int64(Date().timeIntervalSince1970 * 1000) - startTimeMs) / 1000)
-                    : 0
+                    : 0,
+                projectId: route.projectId,
+                accountId: route.accountId,
+                authOwner: route.owner
             ))
             if resolved == 0.0 {
                 AppLog.shared.w("结算：接口说 0 且账单从未出现，按真零消费处理，同时留一条待对账")
@@ -148,11 +153,12 @@ enum SettlementEngine {
     /// 不同学校的字段名/类型不一样（`consumeMoney` 有数字也有字符串），
     /// 声明成固定模型会一解码就失败，然后整条主路径静默失效。
     /// Android 端也是同样的理由（`consumeOrderResultRaw`）。
-    private static func queryConsumeResult(orderNo: String, snCode: String) async -> MoneyProbe {
+    private static func queryConsumeResult(orderNo: String, snCode: String, project: ProjectAuthContext) async -> MoneyProbe {
         do {
             let data = try await ApiClient.post(
                 "/order/consumeOrder/result/query",
                 form: ["snCode": snCode, "orderNo": orderNo],
+                project: project,
                 tag: "consumeResult"
             )
             let raw = String(data: data, encoding: .utf8) ?? ""
@@ -181,6 +187,7 @@ enum SettlementEngine {
         guard let data = raw.data(using: .utf8),
               let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return .unknown }
+        if (root["success"] as? Bool) == false { return .unknown }
 
         // 金额可能在 data 里，也可能直接铺在顶层，两处都看
         var scopes: [[String: Any]] = []
@@ -235,104 +242,73 @@ enum SettlementEngine {
 
     // MARK: - 回退路径：账单列表
 
-    private struct BillProbe {
-        /// 查到的金额（元）；没查到为 nil
-        let amount: Double?
-        /// 账单列表里**是否出现过这一单**（哪怕金额还是占位 `"0.0"`）。
-        /// 这是「有消费」的直接证据：真零消费的单子压根不会产生账单。
-        let sawBill: Bool
+    struct BillProbe {
+        var amount: Double?
+        var sawBill = false
+        var lookupFailed = false
+
+        mutating func observe(_ match: BillDTO?, succeeded: Bool) {
+            if !succeeded {
+                lookupFailed = true
+            } else if let match {
+                sawBill = true
+                if let yuan = match.yuan, yuan > 0 { amount = yuan }
+            }
+        }
+
+        func resolvedAmount(directZero: Bool) -> Double? {
+            amount ?? (directZero && !sawBill && !lookupFailed ? 0 : nil)
+        }
     }
 
     @MainActor private static func settleFromBillList(
         orderNo: String,
         startTimeMs: Int64,
         snCode: String,
-        generation: UUID
+        deviceName: String,
+        project: ProjectAuthContext
     ) async -> BillProbe {
-        let month = currentMonth()
+        let ended = Date()
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM"
+        let endMonth = formatter.string(from: ended)
+        let startMonth = startTimeMs > 0
+            ? formatter.string(from: Date(timeIntervalSince1970: Double(startTimeMs) / 1000)) : endMonth
+        let months = startMonth == endMonth ? [endMonth] : [startMonth, endMonth]
+        let windowStart = startTimeMs > 0 ? startTimeMs - SettlementReconciler.timeSlackMs : 0
+        let windowEnd = Int64(ended.timeIntervalSince1970 * 1000)
 
-        // ⚠️ 兜底时间窗必须**往前放宽**，不能拿 `>= startTimeMs` 卡。
-        //
-        // 账单里的 `consumeDate` 是**下单那一刻**（发 downRate 的时候），
-        // 而 `startTimeMs` 是**开阀确认成功之后**才写的 —— 开阀要轮询一两轮才确认，
-        // 天然晚 1~2 秒。用 `>=` 判就把这一单自己滤掉了。
-        let windowStart = startTimeMs > 0 ? startTimeMs - windowSlackMs : 0
-
-        var sawBill = false
-
+        var probe = BillProbe()
         for attempt in 0 ..< billListRounds {
-            guard SessionWork.isCurrent(generation) else { return BillProbe(amount: nil, sawBill: sawBill) }
-            if let bills = await fetchBills(month: month) {
-                guard SessionWork.isCurrent(generation) else { return BillProbe(amount: nil, sawBill: sawBill) }
-                if let matched = matchBill(bills: bills, orderNo: orderNo, windowStartMs: windowStart) {
-                    sawBill = true
-                    // ⚠️ 账单里的 `consumeMoney` 是**字符串**、单位是**元**
-                    // （和主路径那个数字型的差 1000 倍）
-                    if let m = matched.yuan, m > 0 {
-                        Prefs.recordConsume(snCode, amount: m)
-                        AppLog.shared.i("结算命中（账单列表，第 \(attempt + 1) 轮）：orderNo=\(matched.orderNo ?? "") 金额=\(m) 时间=\(matched.consumeDate ?? "")")
-                        return BillProbe(amount: m, sawBill: true)
-                    }
-                    // 账单先以 "0.0" 占位出现、结算完才填金额，
-                    // 所以这里不能拿 0 当结论，只能记下「见到过账单」继续下一轮
-                    AppLog.shared.i("结算：已匹配到账单但金额还是 \(matched.consumeMoney ?? "空")（可能是占位值）")
+            var bills: [BillDTO] = []
+            var succeeded = true
+            for month in months {
+                guard SessionWork.isCurrent(project.generation) else { return probe }
+                if let rows = try? await BillService.loadMonth(month, project: project, requestType: "2") {
+                    bills += rows
+                } else {
+                    succeeded = false
+                    probe.observe(nil, succeeded: false)
                 }
             }
-            if attempt < billListRounds - 1 {
-                try? await Task.sleep(nanoseconds: 1_200_000_000)
+            guard SessionWork.isCurrent(project.generation) else { return probe }
+            let matched = SettlementReconciler.match(BillHistoryCache.newestFirst(bills),
+                orderNo: orderNo, deviceName: deviceName, from: windowStart, until: windowEnd)
+            // 部分失败时仍保留见过的占位账单。只有精确单号能在此情况下确认正消费。
+            if !succeeded && orderNo.isEmpty {
+                if matched != nil { probe.sawBill = true }
+            } else {
+                probe.observe(matched, succeeded: true)
             }
+            if let amount = probe.amount {
+                Prefs.recordConsume(snCode, amount: amount)
+                AppLog.shared.i("结算命中（账单列表，第 \(attempt + 1) 轮）：¥\(MoneyFormat.format(amount))")
+                return probe
+            }
+            if attempt < billListRounds - 1 { try? await Task.sleep(nanoseconds: 1_200_000_000) }
         }
-
-        AppLog.shared.w("结算超时：orderNo=\(orderNo) 两条路都没拿到金额（sawBill=\(sawBill)）")
-
-        // ⚠️ **一律返回 nil（"还没确定"），不要返回 0.0**。
-        // 「账单里匹配到了这一单」本身就是「有消费」的证据，只是金额还没填上。
-        return BillProbe(amount: nil, sawBill: sawBill)
-    }
-
-    /// 拉一个月的账单；网络/解析失败返回 nil（**空数组和失败必须分开**）
-    private static func fetchBills(month: String) async -> [BillDTO]? {
-        do {
-            let data = try await ApiClient.get(
-                "/order/query/account/bill/list",
-                query: ["month": month, "billRequestType": "2"],
-                tag: "billListForSettle"
-            )
-            let resp = try ApiClient.decodeShell([BillItem].self, from: data, path: "billListForSettle")
-            guard resp.success else { return nil }
-            return (resp.data ?? []).compactMap { $0.consumeBillDTO }
-        } catch {
-            return nil
-        }
-    }
-
-    /// 从账单列表里找出「本次这一单」。
-    ///
-    /// - `orderNo`（20 位）才是**关阀时用的那个**，先拿它精确匹配
-    /// - `orderId`（7 位）是账单**序号**，只作兜底（万一某校真用同一个值）
-    /// - 都对不上才退回时间窗，且窗口要**往前放宽**
-    private static func matchBill(bills: [BillDTO], orderNo: String, windowStartMs: Int64) -> BillDTO? {
-        if !orderNo.isEmpty {
-            if let hit = bills.first(where: { $0.orderNo == orderNo }) { return hit }
-            if let hit = bills.first(where: { $0.orderId == orderNo }) { return hit }
-        }
-        let candidates = bills.filter { bill in
-            // 没有开阀时间就**没法判断哪笔是本次的**，一笔都不能算
-            // （写 `return true` 的话会把所有历史账单都当成本次的，
-            //  于是出现「用时 0 秒 · 消费 ¥上一次的金额」）
-            guard windowStartMs > 0 else { return false }
-            return Int64(BalanceEstimator.billTimeMs(bill.consumeDate ?? "")) >= windowStartMs
-        }
-        return candidates.max { a, b in
-            (a.consumeDate ?? "") < (b.consumeDate ?? "")
-        }
-    }
-
-    private static func currentMonth() -> String {
-        let fmt = DateFormatter()
-        fmt.locale = Locale(identifier: "en_US_POSIX")
-        fmt.dateFormat = "yyyy-MM"
-        return fmt.string(from: Date())
+        return probe
     }
 
     // MARK: - 常量（与 Android 完全一致）
@@ -351,8 +327,6 @@ enum SettlementEngine {
     /// 回退路径问几轮。⚠️ **不能是 1**：账单会先以占位 `"0.0"` 出现，
     /// 只问一轮就会把「刚出现还没填金额」误判成无消费。
     private static let billListRounds = 3
-
-    private static let windowSlackMs: Int64 = 3 * 60 * 1000
 
     private static let amountKeyHint = "(consume|money|amount|fee|cost|pay|charge|price)"
     private static let amountKeyExclude =

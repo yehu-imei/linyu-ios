@@ -32,23 +32,16 @@ struct RootView: View {
                 set: { if !$0 { _ = session.consumeKickReason() } }
             )
         ) {
-            Button("重新登录", role: .cancel) { _ = session.consumeKickReason() }
+            Button("确定", role: .cancel) { _ = session.consumeKickReason() }
         } message: {
-            Text("请重新登录。若正在用水，请确认设备已关闭；无法关闭时请使用官方应用或联系工作人员。")
+            Text("账户已在别处登录，请重新登陆。")
+                .multilineTextAlignment(.center)
         }
         // 遮罩盖在**所有内容之上**（包括弹窗），否则过渡时会看到底层先变色
         .overlay {
-            GeometryReader { geo in
-                if let animation = reveal.animation {
-                    ThemeRevealOverlay(
-                        animation: animation,
-                        progress: reveal.progress,
-                        screen: geo.size
-                    )
-                }
+            if let animation = reveal.animation {
+                ThemeRevealOverlay(animation: animation, progress: reveal.progress)
             }
-            // ⚠️ 不播放动画时这一层必须让点击穿过，否则它铺满全屏会挡住所有按钮
-            .allowsHitTesting(reveal.animation != nil)
         }
         .environmentObject(reveal)
         .environment(\.appColors, colors)

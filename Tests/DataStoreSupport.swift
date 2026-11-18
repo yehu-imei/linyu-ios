@@ -13,10 +13,19 @@ final class Session {
 enum Prefs {
     static var campusBalance = ""
     static var walletBalance = ""
+    static var lastDeviceSnCode = ""
+    static var lastDeviceMac = ""
     static var recordedConsume: [String: Double] = [:]
     static func recordConsume(_ snCode: String, amount: Double) { recordedConsume[snCode] = amount }
 }
-enum BalanceEstimator { static func billTimeMs(_ value: String) -> Double { 0 } }
+enum BalanceEstimator {
+    static func billTimeMs(_ value: String) -> Double {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        return (formatter.date(from: value)?.timeIntervalSince1970 ?? 0) * 1000
+    }
+}
 extension DeviceInfo { static func formatDeviceName(_ value: String) -> String { value } }
 final class AppLog {
     static let shared = AppLog()
@@ -35,14 +44,20 @@ enum ApiClient {
     static var failBills = false
     static var emptyBills = false
     static var failingMonth: String?
+    static var billQueries: [(project: String?, account: String?, type: String?)] = []
+    static var billResponsesByProject: [String: String] = [:]
     static var delay: UInt64 = 0
     static var activeRequests = 0
     static var postPaths: [String] = []
     static var postResponse = "{\"success\":true,\"data\":null}"
+    static var postResponses: [String: String] = [:]
+    static var postProjects: [ProjectAuthContext?] = []
     static var failPost = false
     static var onPost: (() -> Void)?
     static var onGet: ((String) -> Void)?
-    static func get(_ path: String, query: [String: String] = [:], tag: String? = nil) async throws -> Data {
+    @MainActor static func get(
+        _ path: String, query: [String: String] = [:], project: ProjectAuthContext? = nil, tag: String? = nil
+    ) async throws -> Data {
         activeRequests += 1
         defer { activeRequests -= 1 }
         try Task.checkCancellation()
@@ -56,19 +71,27 @@ enum ApiClient {
         }
         if let response = getResponses[path] { return Data(response.utf8) }
         if path.contains("bill/list") {
+            billQueries.append((project?.projectId, project?.accountId, query["billRequestType"]))
             if failBills { throw URLError(.notConnectedToInternet) }
             let month = query["month"] ?? ""
             if month == failingMonth { throw URLError(.notConnectedToInternet) }
-            let data: String = emptyBills ? "[]" : "[{\"consumeBillDTO\":{\"orderId\":\"\(month)\",\"consumeMoney\":\"2.00\"}}]"
+            if let project, let response = billResponsesByProject[project.projectId] {
+                return Data(response.utf8)
+            }
+            let data: String = emptyBills ? "[]" : """
+                [{"consumeBillDTO":{"orderId":"\(month)","consumeDate":"\(month)-10 12:00:00","consumeMoney":"2.00"}}]
+                """
             return Data("{\"success\":true,\"data\":\(data)}".utf8)
         }
         return Data("{\"success\":true,\"data\":null}".utf8)
     }
-    static func post(_ path: String, form: [String: String], tag: String? = nil) async throws -> Data {
+    static func post(_ path: String, form: [String: String], project: ProjectAuthContext? = nil,
+                     tag: String? = nil) async throws -> Data {
         postPaths.append(path)
+        postProjects.append(project)
         onPost?()
         if failPost { throw URLError(.notConnectedToInternet) }
-        return Data(postResponse.utf8)
+        return Data((postResponses[path] ?? postResponse).utf8)
     }
     static func postJSON(_ path: String, body: [String: Any], tag: String? = nil) async throws -> Data {
         try await post(path, form: [:], tag: tag)

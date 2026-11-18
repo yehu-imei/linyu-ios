@@ -56,9 +56,15 @@ enum SettlementRegression {
                             createdAt: Int64(startedAt) + 300_000)
             let b = bill(orderNo: nil, name: "3层-320", money: "0.08", date: "2026-09-18 12:43:38")
             let r = SettlementReconciler.reconcile(pending: [p], bills: [b], nowMs: Int64(startedAt) + 400_000)
-            // 测试桩把 billTimeMs 固定成 0，所以这里只验证「不崩溃 + 结果自洽」
-            check(r.updates.count <= 1 && r.remaining.count <= 1,
-                  "缺少 orderNo 时按设备名与时间窗匹配不会崩且结果自洽")
+            check(r.updates.first?.amount == 0.08 && r.remaining.isEmpty,
+                  "缺少 orderNo 时只匹配时间窗内唯一的同名设备账单")
+            let other = bill(orderNo: nil, name: "3层-320", money: "0.34",
+                             date: "2026-09-18 12:45:38", orderId: "2")
+            let ambiguous = SettlementReconciler.reconcile(
+                pending: [p], bills: [b, other], nowMs: Int64(startedAt) + 400_000
+            )
+            check(ambiguous.updates.isEmpty && ambiguous.remaining == [p],
+                  "同一时间窗出现多笔同名账单继续待对账")
         }
 
         // ③ 匹配不到 → 继续留在待对账
@@ -78,12 +84,24 @@ enum SettlementRegression {
             check(r.updates.isEmpty && r.remaining.isEmpty, "超过 7 天的待对账直接丢弃")
         }
 
-        // ⑤ 金额为 0 也算结清，但不出「补了 X 元」的更新
+        // ⑤ 服务端可能先写入 0 元的占位账单。
         do {
             let p = pending(orderNo: "7", name: "3层-320", startedAt: now - 600_000, createdAt: now - 300_000)
-            let b = bill(orderNo: "7", name: "3层-320", money: "0.0", date: "2026-09-18 12:43:38")
+            var b = bill(orderNo: "7", name: "3层-320", money: "0.0", date: "2026-09-18 12:43:38")
             let r = SettlementReconciler.reconcile(pending: [p], bills: [b], nowMs: now)
-            check(r.updates.isEmpty && r.remaining.isEmpty, "金额为 0 的记录算结清但不产生金额更新")
+            check(r.updates.isEmpty && r.remaining == [p], "0 元占位账单继续待对账")
+            var observed = SettlementEngine.BillProbe()
+            observed.observe(b, succeeded: true)
+            observed.observe(nil, succeeded: true)
+            check(observed.resolvedAmount(directZero: true) == nil, "后续空响应不抹掉占位账单证据")
+            var unavailable = SettlementEngine.BillProbe()
+            unavailable.observe(nil, succeeded: false)
+            check(unavailable.resolvedAmount(directZero: true) == nil, "账单查询失败不能判定无消费")
+            check(SettlementEngine.BillProbe().resolvedAmount(directZero: true) == 0, "查询成功未见账单，沿用直查的无消费结果")
+            b.consumeMoney = "0.37"
+            let complete = SettlementReconciler.reconcile(pending: r.remaining, bills: [b], nowMs: now)
+            check(complete.updates.first?.amount == 0.37 && complete.remaining.isEmpty,
+                  "占位账单补上实际金额后完成对账")
         }
 
         // ⑥ 一条账单只能对掉一条待对账
@@ -94,6 +112,22 @@ enum SettlementRegression {
             let b = bill(orderNo: "11", name: "a", money: "1.00", date: "2026-09-18 12:43:38")
             let r = SettlementReconciler.reconcile(pending: [p1, p2], bills: [b], nowMs: now)
             check(r.updates.count == 1 && r.remaining.count == 1, "同一条账单不会被两条待对账重复使用")
+        }
+
+        do {
+            let project = ProjectAuthContext(projectId: "1", accountId: "10", owner: "same-user", generation: UUID())
+            var p = pending(orderNo: "12", name: "饮水机", startedAt: now - 900_000, createdAt: now - 600_000)
+            p.projectId = "2"
+            p.accountId = "20"
+            p.authOwner = project.owner
+            var other = bill(orderNo: "12", name: "饮水机", money: "9.99", date: "2026-09-18 12:43:38")
+            other.sourceProjectId = "2"
+            other.sourceAccountId = "21"
+            var own = other
+            own.sourceAccountId = "20"
+            own.consumeMoney = "0.12"
+            let r = SettlementReconciler.reconcile(pending: [p], bills: [other, own], defaultProject: project, nowMs: now)
+            check(r.updates.first?.amount == 0.12, "账单单号相同也只能用原项目账户对账")
         }
     }
 }

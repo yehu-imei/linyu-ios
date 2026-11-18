@@ -20,18 +20,56 @@ enum BillService {
         return all
     }
 
-    /// 页面缓存只能接受完整的成功结果，不能把失败或取消当作空账单。
-    static func loadHistoryChecked() async throws -> [BillDTO] {
-        let generation = SessionWork.generation ?? Session.shared.requestGeneration
-        var all: [BillDTO] = []
-        for month in recentMonths() {
-            try Task.checkCancellation()
-            guard SessionWork.isCurrent(generation) else { throw CancellationError() }
-            all.append(contentsOf: try await loadMonth(month))
+    struct History {
+        var bills: [BillDTO] = []
+        var defaultBills: [BillDTO] = []
+        var fresh: [BillDTO] = []
+        var hasDefault = false
+        var hadFailure = false
+    }
+
+    @MainActor static func loadMergedHistory(legacyDefault: [BillDTO]?) async throws -> History {
+        let defaultProject = try ProjectAuthRepository.defaultContext()
+        let projects = try await ProjectAuthRepository.projectAccounts()
+        let months = recentMonths()
+        var history = History()
+        for project in projects {
+            let isDefault = project.projectId == defaultProject.projectId && project.accountId == defaultProject.accountId
+            let responses = await withTaskGroup(of: (String, [BillDTO]?).self) { group in
+                for month in months {
+                    group.addTask { (month, try? await loadMonth(month, project: project)) }
+                }
+                var results: [String: [BillDTO]] = [:]
+                for await (month, bills) in group { results[month] = bills }
+                return results
+            }
+            guard SessionWork.isCurrent(defaultProject.generation) else { throw CancellationError() }
+            for month in months {
+                let owner = BillHistoryCache.monthOwner(project, month: month)
+                let rows: [BillDTO]?
+                if let fetched = responses[month] {
+                    rows = fetched
+                    history.fresh += fetched
+                    BillHistoryCache.save(fetched, owner: owner)
+                } else {
+                    history.hadFailure = true
+                    rows = BillHistoryCache.read(owner: owner) ?? (
+                        isDefault ? legacyDefault?.filter { $0.consumeDate?.hasPrefix(month) == true } : nil
+                    )
+                }
+                if let rows {
+                    history.bills += rows
+                    if isDefault {
+                        history.hasDefault = true
+                        history.defaultBills += rows
+                    }
+                }
+            }
         }
-        guard SessionWork.isCurrent(generation) else { throw CancellationError() }
-        AppLog.shared.i("账单：拉取 \(all.count) 条（最近 3 个月）")
-        return all
+        history.bills = BillHistoryCache.newestFirst(history.bills)
+        history.defaultBills = BillHistoryCache.newestFirst(history.defaultBills)
+        history.fresh = BillHistoryCache.newestFirst(history.fresh, mergeProjects: false)
+        return history
     }
 
     /// 拉最近 3 个月账单；**任一月请求失败就返回 nil**
@@ -70,16 +108,68 @@ enum BillService {
         }
     }
 
-    /// 单月账单。`billRequestType=2` 是 Android 用的固定值。
-    static func loadMonth(_ month: String) async throws -> [BillDTO] {
+    /// 默认项目保留原查询类型，其他授权项目读取设备消费记录。
+    static func loadMonth(_ month: String, project: ProjectAuthContext? = nil, requestType: String? = nil) async throws -> [BillDTO] {
+        let kind = requestType ?? (project.map { $0.projectId != Session.shared.projectId } == true ? "0" : "2")
         let data = try await ApiClient.get(
             "/order/query/account/bill/list",
-            query: ["month": month, "billRequestType": "2"],
+            query: ["month": month, "billRequestType": kind],
+            project: project,
             tag: "bills"
         )
         let resp = try ApiClient.decode([BillItem].self, from: data, path: "billList")
-        guard resp.success else { return [] }
-        return (resp.data ?? []).compactMap { $0.consumeBillDTO }
+        guard let rows = resp.data else { throw ApiError.transport("账单数据暂不可用") }
+        return rows.compactMap { row in
+            guard var bill = row.consumeBillDTO,
+                  let date = [bill.consumeDate, bill.dealDate, bill.createTime]
+                    .compactMap({ $0 }).first(where: { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
+            else { return nil }
+            bill.consumeDate = date.replacingOccurrences(of: "T", with: " ")
+            if bill.description?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
+                bill.description = bill.deviceDescription
+            }
+            if bill.yuan == nil || bill.yuan == 0,
+               let third = bill.thirdTradeMoney.flatMap(Double.init), third.isFinite, third > 0 {
+                bill.consumeMoney = bill.thirdTradeMoney
+            }
+            bill.sourceProjectId = project?.projectId
+            bill.sourceAccountId = project?.accountId
+            return bill
+        }
+    }
+
+    @MainActor static func loadPendingHistory(_ pending: [PendingSettlement]) async -> [BillDTO] {
+        guard let defaultProject = try? ProjectAuthRepository.defaultContext() else { return [] }
+        var windows: [String: Set<String>] = [:]
+        var scopes: [String: ProjectAuthContext] = [:]
+        let dateFormatter = DateFormatter()
+        dateFormatter.locale = Locale(identifier: "en_US_POSIX")
+        dateFormatter.dateFormat = "yyyy-MM"
+        for item in pending {
+            guard item.authOwner == nil || item.authOwner == defaultProject.owner else { continue }
+            let project: ProjectAuthContext
+            if let projectId = item.projectId, let accountId = item.accountId {
+                guard let resolved = try? await ProjectAuthRepository.context(projectId: projectId, accountId: accountId)
+                else { continue }
+                project = resolved
+            } else if item.projectId == nil, item.accountId == nil {
+                project = defaultProject
+            } else { continue }
+            let key = "\(project.projectId):\(project.accountId)"
+            scopes[key] = project
+            for time in [item.startedAt, item.createdAt] where time > 0 {
+                windows[key, default: []].insert(dateFormatter.string(from: Date(timeIntervalSince1970: Double(time) / 1000)))
+            }
+        }
+        var result: [BillDTO] = []
+        for (key, months) in windows {
+            guard SessionWork.isCurrent(defaultProject.generation), let project = scopes[key] else { return [] }
+            for month in months.sorted() {
+                if let rows = try? await loadMonth(month, project: project) { result += rows }
+            }
+        }
+        guard SessionWork.isCurrent(defaultProject.generation) else { return [] }
+        return BillHistoryCache.newestFirst(result, mergeProjects: false)
     }
 
     /// 在最近的账单里找某一单（结算的兜底路径）
@@ -156,6 +246,19 @@ enum BillService {
         await fetch(CampusUserInfo.self, path: "/settlement/campus/userInfo", tag: "campus")?.data
     }
 
+    enum CampusBalanceUpdate: Equatable { case keep, clear, set(Double) }
+
+    static func campusBalanceUpdate(_ response: APIResponse<CampusUserInfo>) -> CampusBalanceUpdate {
+        guard response.success else {
+            return response.errorCode == 12 && response.displayMessage?.trimmingCharacters(in: .whitespacesAndNewlines) == "无效支付配置"
+                ? .clear : .keep
+        }
+        guard let info = response.data, info.signStatus != 0, let amount = info.yuan, amount.isFinite else {
+            return .clear
+        }
+        return .set(amount)
+    }
+
     static func loadAccountInfo() async -> AccountInfo? {
         await fetch(AccountInfo.self, path: "/account/info", tag: "accountInfo")?.data
     }
@@ -199,10 +302,14 @@ enum BillService {
     @MainActor static func refreshBalances() async {
         let generation = SessionWork.generation ?? Session.shared.requestGeneration
         guard SessionWork.isCurrent(generation) else { return }
-        if let c = await loadCampusInfo() {
+        if let data = try? await ApiClient.get("/settlement/campus/userInfo", tag: "campus"),
+           let response = try? ApiClient.decodeShell(CampusUserInfo.self, from: data, path: "campus") {
             guard SessionWork.isCurrent(generation) else { return }
-            Prefs.campusBalance = c.amount ?? ""
-            AppLog.shared.i("一卡通余额：\(c.amount ?? "空")")
+            switch campusBalanceUpdate(response) {
+            case .keep: break
+            case .clear: Prefs.campusBalance = ""
+            case let .set(amount): Prefs.campusBalance = String(amount)
+            }
         }
         guard SessionWork.isCurrent(generation) else { return }
         if let w = await loadWallet() {

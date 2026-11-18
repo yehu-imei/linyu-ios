@@ -53,13 +53,20 @@ import WidgetKit
         next.owner = AppNotifications.accountKey
         next.lastDevice = Prefs.lastDeviceSnCode
         next.balanceTitle = BalanceEstimator.title
-        next.balance = BalanceEstimator.format(BalanceEstimator.estimate(store.bills))
+        if BalanceEstimator.hasRealBalance || store.balanceBillsLoaded {
+            next.balance = BalanceEstimator.format(BalanceEstimator.estimate(store.balanceBills))
+        } else {
+            next.balance = "¥ —"
+        }
         next.busy = flow.controlBusy || handling
         next.message = flow.isStarting ? "正在开启…" : flow.isStopping ? "正在关闭…" : handling ? "正在处理…" : nil
         let orders = ActiveOrderStore.all()
-        let billSnapshots = store.bills.map { WidgetBill(name: $0.displayNamePart, emoji: $0.deviceEmoji,
-            time: $0.consumeDate ?? "", money: $0.yuan.map { "-" + MoneyFormat.withSymbol($0) } ?? "—",
-            id: $0.id, deviceSN: $0.deviceSnCode, detail: $0.deviceTypeLabel, amount: $0.yuan) }
+        func snapshot(_ bill: BillDTO) -> WidgetBill {
+            WidgetBill(name: bill.displayNamePart, emoji: bill.deviceEmoji,
+                time: bill.consumeDate ?? "", money: bill.yuan.map { "-" + MoneyFormat.withSymbol($0) } ?? "—",
+                id: bill.id, deviceSN: bill.deviceSnCode, detail: bill.deviceTypeLabel, amount: bill.yuan)
+        }
+        let billSnapshots = store.bills.map(snapshot)
         // 冷启动台账尚未补齐时保留同账号的展示缓存；运行状态仍以当前订单台账为准。
         var infos: [String: WidgetDevice] = [:]
         if previous.owner == next.owner {
@@ -112,7 +119,17 @@ import WidgetKit
             if let item = infos[sn] {
                 let cached = Prefs.lastConsumeFor(sn)
                 let legacy = (item.aliases ?? []).map { Prefs.lastConsumeFor($0) }.first { $0 > 0 } ?? 0
-                infos[sn]?.lastConsume = WidgetDisplayPolicy.lastConsume(cached: cached > 0 ? cached : legacy, device: item, bills: billSnapshots)
+                let projectId = deviceInfos[sn]?.projectId
+                let rows = if let projectId, projectId > 0, String(projectId) != Session.shared.projectId {
+                    store.bills.filter { $0.sourceProjectId == String(projectId) }
+                } else if item.detail.contains("饮水") && projectId == nil {
+                    store.bills.filter { bill in
+                        bill.deviceSnCode.map { $0 == sn || (item.aliases ?? []).contains($0) } ?? false
+                    }
+                } else {
+                    store.balanceBills
+                }
+                infos[sn]?.lastConsume = WidgetDisplayPolicy.lastConsume(cached: cached > 0 ? cached : legacy, device: item, bills: rows.map(snapshot))
             }
             if let order = orders.first(where: { $0.snCode == sn }) {
                 infos[sn]?.running = true
@@ -207,7 +224,10 @@ import WidgetKit
             return request.kind == .refreshNearby ? .nearby : .home
         }
         do {
-            guard let info = try await DeviceLookup.load(request.sn) else { flow.toast = "设备不存在"; return .home }
+            guard let info = try await DeviceLookup.load(request.sn), info.snCode == request.sn else {
+                flow.toast = "设备信息已变化，请刷新"
+                return .home
+            }
             guard SessionWork.isCurrent(generation) else { return nil }
             await store.putDeviceInfo(info, sn: request.sn)
             if request.kind == .start {

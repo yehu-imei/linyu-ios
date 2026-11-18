@@ -27,6 +27,7 @@ enum DeviceControlRegression {
         check(target.matchesServerOrder(record: a, orderNo: "order-A", isOwner: true), "通知停止前确认服务器原订单")
         check(!target.matchesServerOrder(record: a, orderNo: "remote-new-order", isOwner: true), "旧通知不能关闭远端重开的订单")
         check(!target.matchesServerOrder(record: a, orderNo: "order-A", isOwner: false), "通知不能关闭他人的订单")
+        check(!target.matchesServerOrder(record: a, orderNo: "order-A", isOwner: nil), "通知停止需要明确的所属账户")
         var unknown = a; unknown.orderNo = ""
         check(!pending.matchesServerOrder(record: unknown, orderNo: "unknown", isOwner: true), "没有原订单号时不猜测通知目标")
         check(DeviceNotificationTarget.notificationID(snCode: "A", finished: false) != DeviceNotificationTarget.notificationID(snCode: "B", finished: false), "两台设备通知互不覆盖")
@@ -60,11 +61,49 @@ enum DeviceControlRegression {
         if case .inUseByOthers = await CloudShower.open(snCode: "A", allowNewOrder: false) {
             check(true, "恢复拒绝他人订单")
         } else { check(false, "恢复拒绝他人订单") }
+        let usingPath = "/order/tcpDevice/query/rateOrder/using"
+        let closePath = "/order/tcpDevice/closeOrder"
+        ApiClient.postResponse = #"{"success":false,"errorCode":307,"data":{"orderNo":"unknown-owner"}}"#
+        ApiClient.postPaths = []
+        if case .inUseByOthers = await CloudShower.open(snCode: "A") {
+            check(ApiClient.postPaths == [usingPath], "307 未确认订单归属时禁止恢复和申请新费率")
+        } else { check(false, "307 未确认订单归属时禁止恢复和申请新费率") }
+        ApiClient.postPaths = []
+        if case .unconfirmed = await CloudShower.close(snCode: "A", orderNo: "") {
+            check(ApiClient.postPaths == [usingPath], "缺少可信订单号时不发送关阀")
+        } else { check(false, "缺少可信订单号时不发送关阀") }
+        ApiClient.postResponse = #"{"success":false,"errorCode":307,"data":{"snCode":"B","orderNo":"other-device","isOwner":true}}"#
+        if case .inUseByOthers = await CloudShower.open(snCode: "A", allowNewOrder: false) {
+            check(true, "恢复拒绝响应中身份不一致的设备")
+        } else { check(false, "恢复拒绝响应中身份不一致的设备") }
+
         ApiClient.postResponse = #"{"success":true,"data":null}"#
         ApiClient.postPaths = []
-        if case .closed = await CloudShower.close(snCode: "A", orderNo: "order-A") {
-            check(ApiClient.postPaths == ["/order/tcpDevice/closeOrder"], "服务端受理关阀后立即返回，不等待仅供日志使用的查询")
-        } else { check(false, "服务端受理关阀后立即返回，不等待仅供日志使用的查询") }
+        ApiClient.postProjects = []
+        let project = ProjectAuthContext(projectId: "89", accountId: "12", owner: "1:88:11",
+                                         generation: Session.shared.requestGeneration)
+        if case .closed = await CloudShower.close(snCode: "A", orderNo: "order-A", project: project) {
+            check(ApiClient.postPaths == [closePath, usingPath], "关阀受理后确认空闲才返回已关闭")
+            check(ApiClient.postProjects == [project, project], "关阀请求和复核均沿用目标项目账户")
+        } else { check(false, "关阀受理后确认空闲才返回已关闭") }
+
+        ApiClient.postPaths = []
+        ApiClient.postResponses[usingPath] = #"{"success":false,"errorCode":307,"data":null}"#
+        if case .unconfirmed = await CloudShower.close(snCode: "A", orderNo: "order-A", project: project) {
+            check(ApiClient.postPaths == [closePath, usingPath, usingPath, usingPath], "关阀受理但一直占用时只复核，不重复关阀")
+        } else { check(false, "关阀受理但一直占用时保持未确认") }
+        ApiClient.postResponses.removeValue(forKey: usingPath)
+
+        let accounts = ProjectAuthPolicy.accounts([
+            .init(userId: 1, projectId: 88, accountId: 999),
+            .init(userId: 1, projectId: 89, accountId: 12),
+            .init(userId: 2, projectId: 90, accountId: 13),
+            .init(userId: 1, projectId: 91, accountId: -1),
+            .init(userId: 1, projectId: 92, accountId: 15),
+            .init(userId: 1, projectId: 92, accountId: 16)
+        ], userId: "1", defaultContext: .init(
+            projectId: "88", accountId: "11", owner: project.owner, generation: project.generation))
+        check(accounts == ["88": "11", "89": "12"], "仅接受当前用户明确关联的项目账户")
 
         ActiveOrderStore.clear()
         ActiveOrderStore.upsert(a)
@@ -95,5 +134,21 @@ enum DeviceControlRegression {
             check(true, "断网关阀不冒充已关闭")
         } else { check(false, "断网关阀不冒充已关闭") }
         ApiClient.failPost = false
+
+        let listPath = "/user/project/list"
+        ApiClient.getResponses[listPath] = #"{"success":false,"data":[{"projectId":89,"accountId":12}]}"#
+        Session.shared.requestGeneration = UUID()
+        let failedAccounts = try? await ProjectAuthRepository.projectAccounts()
+        check(failedAccounts?.count == 1, "失败的项目账户响应不能授权跨项目")
+
+        ApiClient.getResponses[listPath] = #"{"success":true,"data":[{"projectId":89,"accountId":12}]}"#
+        Session.shared.requestGeneration = UUID()
+        let linked = try? await ProjectAuthRepository.context(projectId: "89", accountId: "12")
+        check(linked?.projectId == "89" && linked?.accountId == "12", "服务端已关联项目启用目标账户")
+        let unlinked = try? await ProjectAuthRepository.context(projectId: "89", accountId: "99")
+        check(unlinked == nil, "旧订单记录不能冒用同项目下的其他账户")
+        Session.shared.requestGeneration = UUID()
+        check(linked.map(ProjectAuthRepository.isCurrent) == false, "重新登录后旧项目快照失效")
+        ApiClient.getResponses.removeValue(forKey: listPath)
     }
 }

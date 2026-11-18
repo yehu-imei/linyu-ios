@@ -28,6 +28,7 @@ jobs:
         run: |
           swiftc -swift-version 5 -parse-as-library \
             LinYu/ApiModels.swift LinYu/BillService.swift LinYu/AppDataStore.swift \
+            LinYu/ProjectAuthContext.swift LinYu/ProjectAuthRepository.swift \
             LinYu/PendingSettlement.swift LinYu/SettlementEngine.swift \
             LinYu/ActiveOrderStore.swift LinYu/MoneyFormat.swift \
             LinYu/PreDeductPolicy.swift Tests/MoneyDisplayRegression.swift \
@@ -39,6 +40,7 @@ jobs:
             LinYu/LogRedactor.swift Tests/ParityFinishRegression.swift \
             Tests/SharedStoreSessionRegression.swift \
             LinYu/UserCardLayout.swift Tests/UserCardLayoutRegression.swift \
+            LinYu/HomeDeviceLayout.swift Tests/HomeDeviceLayoutRegression.swift \
             LinYu/BleCallbackGuard.swift Tests/BleCallbackRegression.swift \
             LinYu/BleReplyBuffer.swift Tests/BleReplyBufferRegression.swift \
             LinYu/BleSettlementCleanup.swift Tests/BleSettlementRegression.swift \
@@ -50,7 +52,7 @@ jobs:
             -o "$RUNNER_TEMP/linyu-data-tests"
           "$RUNNER_TEMP/linyu-data-tests"
           swiftc -swift-version 5 -parse-as-library \
-            LinYu/ApiModels.swift LinYu/ApiClient.swift LinYu/LoginFeedback.swift LinYu/SessionWork.swift Tests/NetworkRegression.swift \
+            LinYu/ApiModels.swift LinYu/ApiClient.swift LinYu/ProjectAuthContext.swift LinYu/LoginFeedback.swift LinYu/SessionWork.swift Tests/NetworkRegression.swift \
             -o "$RUNNER_TEMP/linyu-network-tests"
           "$RUNNER_TEMP/linyu-network-tests"
           swiftc -swift-version 5 -parse-as-library \
