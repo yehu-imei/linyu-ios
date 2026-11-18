@@ -119,12 +119,12 @@ struct DeviceGlyph: View {
             }
     }
 
-    /// 按设备 emoji 取底色（对照 Android 的 ActiveOrderCard）
-    static func background(for emoji: String, colors: AppColorSet) -> Color {
+    /// 上次使用和常用设备按设备类型使用固定底色。
+    static func background(for emoji: String, defaultColor: Color = Color(hex: 0x2563EB)) -> Color {
         switch emoji {
         case "🪥": return Color(hex: 0xFFCC80)
         case "❄️", "♨️", "🚰": return Color(hex: 0x10B981)
-        default: return colors.accent
+        default: return defaultColor
         }
     }
 }

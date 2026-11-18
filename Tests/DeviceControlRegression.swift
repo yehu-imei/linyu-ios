@@ -87,10 +87,31 @@ enum DeviceControlRegression {
             check(ApiClient.postProjects == [project, project], "关阀请求和复核均沿用目标项目账户")
         } else { check(false, "关阀受理后确认空闲才返回已关闭") }
 
+        let stillRunning = #"{"success":false,"errorCode":307,"data":null}"#
+        let idle = #"{"success":true,"data":null}"#
+        for closeReply in [idle, stillRunning] {
+            var statusReads = 0
+            ApiClient.postPaths = []
+            ApiClient.postResponses[closePath] = closeReply
+            ApiClient.onPost = {
+                guard ApiClient.postPaths.last == usingPath else { return }
+                statusReads += 1
+                ApiClient.postResponses[usingPath] = statusReads < 5 ? stillRunning : idle
+            }
+            let result = await CloudShower.close(snCode: "A", orderNo: "order-A", project: project, confirmationPause: {})
+            if case .closed = result {
+                check(ApiClient.postPaths == [closePath] + Array(repeating: usingPath, count: 5),
+                      "关阀受理或返回 307 后，延迟到第五次确认空闲也只发送一次关阀")
+            } else { check(false, "关阀等待设备延迟回报") }
+        }
+        ApiClient.onPost = nil
+        ApiClient.postResponses.removeValue(forKey: closePath)
+
         ApiClient.postPaths = []
-        ApiClient.postResponses[usingPath] = #"{"success":false,"errorCode":307,"data":null}"#
-        if case .unconfirmed = await CloudShower.close(snCode: "A", orderNo: "order-A", project: project) {
-            check(ApiClient.postPaths == [closePath, usingPath, usingPath, usingPath], "关阀受理但一直占用时只复核，不重复关阀")
+        ApiClient.postResponses[usingPath] = stillRunning
+        if case .unconfirmed = await CloudShower.close(snCode: "A", orderNo: "order-A", project: project, confirmationPause: {}) {
+            check(ApiClient.postPaths == [closePath] + Array(repeating: usingPath, count: 9),
+                  "关阀受理但一直占用时只复核，不重复关阀")
         } else { check(false, "关阀受理但一直占用时保持未确认") }
         ApiClient.postResponses.removeValue(forKey: usingPath)
 

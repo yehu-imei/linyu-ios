@@ -140,7 +140,10 @@ enum CloudShower {
         case unconfirmed(String)
     }
 
-    static func close(snCode: String, orderNo: String, project: ProjectAuthContext? = nil) async -> CloseOutcome {
+    static func close(snCode: String, orderNo: String, project: ProjectAuthContext? = nil,
+                      confirmationPause: @escaping @Sendable () async throws -> Void = {
+                          try await Task.sleep(nanoseconds: 1_000_000_000)
+                      }) async -> CloseOutcome {
         let generation = SessionWork.generation ?? Session.shared.requestGeneration
         guard SessionWork.isCurrent(generation) else { return .unconfirmed("登录状态已变化") }
         guard !snCode.isEmpty else { return .failed("设备信息不完整") }
@@ -176,21 +179,34 @@ enum CloudShower {
             return .unconfirmed("关闭结果未确认，设备可能仍在出水")
         }
 
-        if !resp.success {
-            // “关闭中”或 307 只说明服务端状态，仍需证实空闲。
-            if resp.errorCode == 307 || (resp.displayMessage?.contains("已在") == true) {
-                if await orderRunning(snCode: snCode, project: project) == false { return .closed }
-                return .unconfirmed("关闭结果未确认，设备可能仍在出水")
-            }
+        if !resp.success, resp.errorCode != 307, resp.displayMessage?.contains("已在") != true {
             return .failed(resp.displayMessage ?? "关闭失败，请重试")
         }
 
-        // 与 Android 一样只复核状态，绝不重复发出关阀请求。
-        for attempt in 0..<3 {
-            if attempt > 0 { try? await Task.sleep(nanoseconds: 300_000_000) }
-            guard SessionWork.isCurrent(generation) else { return .unconfirmed("登录状态已变化") }
-            if await orderRunning(snCode: snCode, project: project) == false { return .closed }
+        // 关阀受理后设备可能晚几秒才回报空闲。保持正在关闭，只读状态，不重发指令。
+        let confirmed = await withTaskGroup(of: Bool.self) { group in
+            group.addTask {
+                for attempt in 0...8 {
+                    if attempt > 0 {
+                        do { try await confirmationPause() } catch { return false }
+                    }
+                    guard SessionWork.isCurrent(generation) else { return false }
+                    let running = await orderRunning(snCode: snCode, project: project)
+                    guard SessionWork.isCurrent(generation) else { return false }
+                    if running == false { return true }
+                }
+                return false
+            }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: 9_000_000_000)
+                return false
+            }
+            let result = await group.next() ?? false
+            group.cancelAll()
+            return result
         }
+        if confirmed { return .closed }
+        guard SessionWork.isCurrent(generation) else { return .unconfirmed("登录状态已变化") }
         return .unconfirmed("关闭结果未确认，设备可能仍在出水")
     }
 

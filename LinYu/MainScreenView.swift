@@ -86,6 +86,14 @@ struct MainScreenView: View {
         return matches.count == 1 ? matches[0] : nil
     }
 
+    private var displayedSections: [HomeDeviceSection] {
+        if editing { return homeLayout.sections }
+        return homeLayout.sections.filter { section in
+            !homeLayout.hidden.contains(section) && (section != .lastUsed ||
+                (flow.restoredOrders.isEmpty && !Prefs.lastDeviceSnCode.isEmpty))
+        }
+    }
+
     var body: some View {
         ZStack {
             ScrollView {
@@ -104,13 +112,12 @@ struct MainScreenView: View {
                             )
                         }
                     }
-                    ForEach(homeLayout.sections) { section in
+                    ForEach(displayedSections) { section in
                         let isVisible = !homeLayout.hidden.contains(section)
-                        if editing || (isVisible && (section != .lastUsed ||
-                            (flow.restoredOrders.isEmpty && !Prefs.lastDeviceSnCode.isEmpty))) {
+                        Section {
+                            homeSectionContent(section, opacity: isVisible ? 1 : 0.45)
+                        } header: {
                             homeSectionHeader(section, isVisible: isVisible)
-                            homeSectionContent(section)
-                                .opacity(isVisible ? 1 : 0.45)
                         }
                     }
 
@@ -214,7 +221,9 @@ struct MainScreenView: View {
             Spacer()
             HStack(spacing: 8) {
                 EditModeButton(isEditing: editing, circleBackground: true) {
-                    editing.toggle()
+                    var transaction = Transaction(animation: nil)
+                    transaction.disablesAnimations = true
+                    withTransaction(transaction) { editing.toggle() }
                 }
                 .accessibilityLabel(editing ? "完成编辑" : "编辑首页")
                 circleIconButton {
@@ -290,7 +299,7 @@ struct MainScreenView: View {
     }
 
     @ViewBuilder
-    private func homeSectionContent(_ section: HomeDeviceSection) -> some View {
+    private func homeSectionContent(_ section: HomeDeviceSection, opacity: Double) -> some View {
         switch section {
         case .lastUsed:
             if Prefs.lastDeviceSnCode.isEmpty {
@@ -298,8 +307,9 @@ struct MainScreenView: View {
                     .font(.system(size: 13))
                     .foregroundStyle(colors.textSecondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    .opacity(opacity)
             } else {
-                lastDeviceCard
+                lastDeviceCard.opacity(opacity)
             }
         case .favorites:
             if homeLayout.favorites.isEmpty {
@@ -307,16 +317,17 @@ struct MainScreenView: View {
                     .font(.system(size: 13))
                     .foregroundStyle(colors.textSecondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    .opacity(opacity)
             }
             ForEach(homeLayout.favorites) { favorite in
-                favoriteCard(favorite)
+                favoriteCard(favorite).opacity(opacity)
             }
         case .nearby:
             let devices = editing ? scanned : filtered
-            if !editing && !boundRoom.isEmpty { boundRoomRow }
-            if scanner.isScanning { scanningRow }
-            if devices.isEmpty && !scanner.isScanning { emptyHint }
-            ForEach(devices, id: \.id) { device in deviceCard(device) }
+            if !editing && !boundRoom.isEmpty { boundRoomRow.opacity(opacity) }
+            if scanner.isScanning { scanningRow.opacity(opacity) }
+            if devices.isEmpty && !scanner.isScanning { emptyHint.opacity(opacity) }
+            ForEach(devices, id: \.id) { device in deviceCard(device).opacity(opacity) }
         }
     }
 
@@ -356,7 +367,7 @@ struct MainScreenView: View {
                 cornerRadius: 14,
                 emojiSize: 22,
                 iconSize: 26,
-                background: DeviceGlyph.background(for: record.deviceEmoji, colors: colors)
+                background: DeviceGlyph.background(for: record.deviceEmoji, defaultColor: colors.accent)
             )
 
             VStack(alignment: .leading, spacing: 4) {
@@ -458,7 +469,7 @@ struct MainScreenView: View {
                 cornerRadius: 14,
                 emojiSize: 22,
                 iconSize: 26,
-                background: DeviceGlyph.background(for: emoji, colors: colors)
+                background: DeviceGlyph.background(for: emoji)
             )
 
             VStack(alignment: .leading, spacing: 4) {
