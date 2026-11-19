@@ -77,6 +77,7 @@ open LinYu.xcodeproj
 
 - [更新日志](CHANGELOG.md)
 - [应用内精简日志](docs/APP_CHANGELOG.md)
+- [安卓与 iOS 功能对齐及平台差异](docs/安卓对齐清单.md)
 - [问题反馈](https://github.com/yehu-imei/linyu-ios/issues)
 - [Android 项目](https://github.com/yehu-imei/linyu) · [Android Gitee 镜像](https://gitee.com/yehu-imei/linyu)
 - [iOS Gitee 镜像](https://gitee.com/yehu-imei/linyu-ios)
