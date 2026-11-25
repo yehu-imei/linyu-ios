@@ -67,6 +67,11 @@ struct WidgetSnapshot: Codable, Equatable {
 }
 
 enum WidgetDisplayPolicy {
+    static func readoutAction(staleBusy: Bool, running: Bool) -> WidgetCommandKind {
+        if staleBusy { return .refresh }
+        return running ? .stop : .bills
+    }
+
     // Android 按设备保存消费；没有本机记录时，只用明确匹配设备的账单补齐。
     static func lastConsume(cached: Double, device: WidgetDevice, bills: [WidgetBill]) -> Double {
         if cached > 0 { return cached }

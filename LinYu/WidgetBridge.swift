@@ -11,7 +11,8 @@ import WidgetKit
     @Published var pendingBillID: String?
     @Published private(set) var operationMessage: String?
     private var acceptedSnapshot: WidgetSnapshot?
-    private var handling = false
+    private var activeOperation: UUID?
+    private var handling: Bool { activeOperation != nil }
     private var lastReload = Date.distantPast
     private var needsReload = false
     private var reloadTask: Task<Void, Never>?
@@ -37,6 +38,7 @@ import WidgetKit
         pendingDeviceSN = nil
         pendingBillID = nil
         operationMessage = nil
+        activeOperation = nil
         consumed.removeAll()
         delivery = WidgetDeliveryPolicy()
         lastSnapshot = nil
@@ -47,7 +49,7 @@ import WidgetKit
         WidgetCenter.shared.reloadAllTimelines()
     }
     func sync(store: AppDataStore, flow: ShowerFlow, scanner: BLEScanner, force: Bool = false) {
-        guard Session.shared.isLoggedIn else { clear(); return }
+        guard store.sessionIsCurrent else { return }
         let previous = lastSnapshot ?? WidgetSharedStore.read()
         var next = WidgetSnapshot()
         next.owner = AppNotifications.accountKey
@@ -193,7 +195,8 @@ import WidgetKit
 
     /// URL 只承接已经渲染的组件按钮；校验随机身份、账号、设备、订单，防止旧按钮操作新单。
     func process(store: AppDataStore, flow: ShowerFlow, scanner: BLEScanner) async -> WidgetCommandKind? {
-        guard !handling, !flow.controlBusy, let request = command, !request.kind.isNavigation else { return nil }
+        guard store.sessionIsCurrent, !handling, !flow.controlBusy, let request = command,
+              !request.kind.isNavigation else { return nil }
         let snapshot = acceptedSnapshot ?? WidgetSharedStore.read()
         acceptedSnapshot = nil
         command = nil
@@ -207,15 +210,16 @@ import WidgetKit
         let actionID = "\(request.token):\(request.kind.rawValue):\(request.sn)"
         guard !consumed.contains(actionID) else { return .home }
         consumed.insert(actionID)
-        handling = true
+        activeOperation = request.id
         operationMessage = request.kind == .stop ? "正在关闭设备…" : request.kind == .start ? "正在获取设备信息…" : "正在刷新…"
         AppLog.shared.i("组件操作开始：\(request.kind.rawValue)，目标 \(request.sn)")
         defer {
-            handling = false
-            operationMessage = nil
-            AppLog.shared.i("组件操作结束：\(request.kind.rawValue)，当前设备 \(flow.activeOrder?.snCode ?? "无")")
-            consumed.remove(actionID)
-            sync(store: store, flow: flow, scanner: scanner, force: true)
+            if activeOperation == request.id {
+                activeOperation = nil
+                operationMessage = nil
+                consumed.remove(actionID)
+                sync(store: store, flow: flow, scanner: scanner, force: true)
+            }
         }
         if request.kind == .refresh || request.kind == .refreshNearby {
             if request.kind == .refreshNearby { scanner.start() }

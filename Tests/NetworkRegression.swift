@@ -7,14 +7,23 @@ final class Session {
     var requestGeneration = UUID()
     var isLoggedIn = true
     var projectId = "test-school"
+    var kickReasons: [String] = []
     var authFields: [String: String] {
         ["loginCode": "test-only", "userId": "test-user", "projectId": projectId, "accountId": "test-account"]
     }
     var authQuery: [String: String] { authFields }
+    func save(loginCode: String, userId: String, accountId: String, projectId: String,
+              telephone: String, displayName: String?) {}
+    @MainActor func kickOut(reason: String?) {
+        kickReasons.append(reason ?? "")
+        requestGeneration = UUID()
+        isLoggedIn = false
+    }
 }
 final class AppLog {
     static let shared = AppLog()
-    func i(_ text: String, _ detail: String?) {}
+    func i(_ text: String, _ detail: String? = nil) {}
+    func w(_ text: String) {}
     func e(_ text: String, _ detail: String?) {}
 }
 final class MockProtocol: URLProtocol {
@@ -24,6 +33,7 @@ final class MockProtocol: URLProtocol {
     static var requests = 0
     static var lastRequest: URLRequest?
     static var lastForm = ""
+    static var responseBody = #"{"success":true,"data":null}"#
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
@@ -51,7 +61,7 @@ final class MockProtocol: URLProtocol {
         }
         let response = HTTPURLResponse(url: request.url!, statusCode: Self.status, httpVersion: nil, headerFields: nil)!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-        client?.urlProtocol(self, didLoad: Data(#"{"success":true,"data":null}"#.utf8))
+        client?.urlProtocol(self, didLoad: Data(Self.responseBody.utf8))
         client?.urlProtocolDidFinishLoading(self)
     }
     override func stopLoading() {}
@@ -69,7 +79,7 @@ final class MockProtocol: URLProtocol {
         let methods: [(String, () async throws -> Data)] = [
             ("GET", { try await ApiClient.get("/mock") }),
             ("POST", { try await ApiClient.post("/mock", form: [:]) }),
-            ("JSON", { try await ApiClient.postJSON("/mock", body: [:]) })
+            ("JSON", { try await ApiClient.postJSON("/mock", body: ["loginCode": "test-only"]) })
         ]
         // 直接测试生产解析器：业务失败必须中断领取，但水控错误码仍可分支处理。
         let rejected = Data(#"{"success":false,"errorCode":307,"errorMessage":"设备正在使用","data":null}"#.utf8)
@@ -85,11 +95,16 @@ final class MockProtocol: URLProtocol {
         } catch { check(false, "外壳解析不应因业务失败抛错") }
         for (name, request) in methods {
             for status in [401, 403] {
+                Session.shared.isLoggedIn = true
+                let prior = Session.shared.kickReasons.count
                 MockProtocol.status = status
                 do { _ = try await request(); check(false, "\(name) \(status)") }
                 catch ApiError.unauthorized(let actual) { check(actual == status, "\(name)保留HTTP \(status)类型") }
                 catch { check(false, "\(name)错误被包装: \(error)") }
+                check(Session.shared.kickReasons.count == prior + 1, "\(name)有效主会话收到HTTP \(status)立即退出")
             }
+            Session.shared.isLoggedIn = true
+            let prior = Session.shared.kickReasons.count
             MockProtocol.status = 500
             do { _ = try await request(); check(false, "\(name)HTTP500") }
             catch ApiError.http(let status) { check(status == 500, "\(name)不把HTTP500成功JSON当业务成功") }
@@ -108,7 +123,44 @@ final class MockProtocol: URLProtocol {
             catch ApiError.transport(let message) { check(message == "网络连接失败，请检查网络", "\(name)断网不当作登录失效且提示简短中文") }
             catch { check(false, "\(name)断网错误类型") }
             MockProtocol.failNetwork = false
+            check(Session.shared.kickReasons.count == prior, "\(name)网络、HTTP 500 与旧响应不结束会话")
         }
+        MockProtocol.responseBody = #"{"success":false,"msg":"Token过期，请重新登录","data":null}"#
+        let beforeExpiry = Session.shared.kickReasons.count
+        do {
+            _ = try await ApiClient.get("/device/info/mac")
+            check(false, "设备详情业务响应说明会话过期应中止")
+        } catch is CancellationError {
+            check(Session.shared.kickReasons.count == beforeExpiry + 1, "设备详情的业务失效触发重新登录")
+        } catch { check(false, "业务会话失效应中止旧请求") }
+        Session.shared.isLoggedIn = true
+        MockProtocol.responseBody = #"{"success":false,"errorCode":401,"data":null}"#
+        let beforeWalletExpiry = Session.shared.kickReasons.count
+        _ = try? await ApiClient.get("/account/wallet")
+        check(Session.shared.kickReasons.count == beforeWalletExpiry + 1, "保留钱包心跳对业务错误码 401 的失效处理")
+        Session.shared.isLoggedIn = true
+        MockProtocol.responseBody = #"{"success":false,"msg":"Token过期，请重新登录","data":null}"#
+        let beforeUnauthenticated = Session.shared.kickReasons.count
+        _ = try? await ApiClient.post("/user/login", form: [:], withAuth: false)
+        _ = try? await ApiClient.get("/user/verification/code/get")
+        check(Session.shared.kickReasons.count == beforeUnauthenticated, "登录和短信验证码响应不结束已有会话")
+        MockProtocol.responseBody = #"{"success":false,"errorCode":429,"errorMessage":"发送频繁，请稍后重试","data":null}"#
+        do {
+            try await AuthService.sendSmsCode(phone: "10000000000")
+            check(false, "HTTP 200 的发码拒绝不能视为已发送")
+        } catch ApiError.business(let code, _) {
+            check(code == 429, "发码失败沿用业务错误码")
+        } catch { check(false, "发码拒绝应返回业务错误") }
+        MockProtocol.responseBody = #"{"success":true,"data":1}"#
+        do {
+            try await AuthService.sendSmsCode(phone: "10000000000", typeId: 5)
+            check(true, "发码成功兼容非空标记字段")
+        } catch { check(false, "发码成功被误判失败") }
+        MockProtocol.responseBody = #"{"success":false,"errorMessage":"二维码已失效，请重新扫码","data":null}"#
+        let stillLoggedIn = try? await ApiClient.get("/device/info/mac")
+        check(stillLoggedIn != nil && Session.shared.kickReasons.count == beforeUnauthenticated,
+              "二维码失效等设备业务错误保持原处理")
+        MockProtocol.responseBody = #"{"success":true,"data":null}"#
         Session.shared.isLoggedIn = false
         _ = try? await ApiClient.get("/mock")
         check(MockProtocol.lastRequest?.url?.query?.contains("loginCode") != true, "未登录GET不拼空认证字段")
@@ -138,6 +190,16 @@ final class MockProtocol: URLProtocol {
                   "跨项目 POST 表单和报头使用同一个目标项目")
         } catch { check(false, "跨项目请求成功构造") }
         check(Session.shared.projectId == "test-school", "跨项目请求保留原登录项目")
+        MockProtocol.status = 403
+        let beforeDenied = Session.shared.kickReasons.count
+        _ = try? await ApiClient.get("/mock", project: project)
+        check(Session.shared.kickReasons.count == beforeDenied, "关联项目单独返回 HTTP 403 不结束主会话")
+        MockProtocol.status = 401
+        MockProtocol.rotateSession = true
+        _ = try? await ApiClient.get("/mock")
+        check(Session.shared.kickReasons.count == beforeDenied, "旧会话的 HTTP 401 不结束新会话")
+        MockProtocol.rotateSession = false
+        MockProtocol.status = 200
         let before = MockProtocol.requests
         let expired = Session.shared.requestGeneration
         Session.shared.requestGeneration = UUID()

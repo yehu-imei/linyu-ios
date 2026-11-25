@@ -184,7 +184,7 @@ struct LinYuWidgetView: View {
         }
     }
     private var readout: some View {
-        destination(url(device?.running == true ? .stop : .bills)) {
+        destination(url(WidgetDisplayPolicy.readoutAction(staleBusy: staleBusy, running: device?.running == true))) {
           VStack(spacing: 5) {
             if staleBusy { Text("状态未知，请刷新").multilineTextAlignment(.center) }
             else if let message = snapshot.message { Text(message).multilineTextAlignment(.center).lineLimit(3) }

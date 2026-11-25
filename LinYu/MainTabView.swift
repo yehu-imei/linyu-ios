@@ -278,6 +278,7 @@ struct MainTabView: View {
     }
 
     @MainActor @discardableResult private func consumeWidgetNavigation() -> Bool {
+        guard store.sessionIsCurrent else { return false }
         guard let action = widgets.consumeNavigation() else { return false }
         guard !flow.controlBusy, !handlingWidget else {
             widgets.pendingDeviceSN = nil
@@ -295,6 +296,7 @@ struct MainTabView: View {
     }
 
     @MainActor private func processWidgetCommand() async {
+        guard store.sessionIsCurrent else { return }
         if consumeWidgetNavigation() { return }
         guard let request = widgets.command else { return }
         guard UIApplication.shared.applicationState == .active else {
@@ -318,6 +320,7 @@ struct MainTabView: View {
         flow.centralProvider = { [scanner] in scanner.manager }
         flow.deviceInfoProvider = { [store] sn in store.deviceInfos[sn] }
         _ = await widgets.process(store: store, flow: flow, scanner: scanner)
+        guard store.sessionIsCurrent else { return }
         if request.kind == .start, flow.activeOrder?.snCode == request.sn {
             flow.setUsePageVisible(true, reason: "组件开启完成")
         }

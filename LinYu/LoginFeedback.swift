@@ -1,6 +1,23 @@
 import Foundation
 
 enum LoginFeedback {
+    static func isSessionExpiredMessage(_ value: String) -> Bool {
+        let text = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            .replacingOccurrences(of: "登陆", with: "登录")
+        if ["未登录", "请先登录", "请重新登录", "登录已失效", "登录失效", "登录已过期", "登录过期",
+            "在别处登录", "在其他地方登录", "在其他设备登录", "在其它设备登录", "在另一台设备登录",
+            "sign in again", "log in again", "login required", "not logged in"].contains(where: text.contains) {
+            return true
+        }
+        if ["蓝牙会话", "设备会话", "device session", "bluetooth session"].contains(where: text.contains) {
+            return false
+        }
+        let identifiesSession = ["登录状态", "登录会话", "登录凭证", "登录信息", "令牌", "会话", "token",
+                                 "logincode", "session"].contains(where: text.contains)
+        return identifiesSession && ["失效", "过期", "无效", "不存在", "认证失败", "校验失败", "invalid",
+                                    "expired", "revoked"].contains(where: text.contains)
+    }
+
     static func message(_ error: Error, fallback: String = "网络连接失败，请检查网络") -> String {
         if let url = error as? URLError {
             switch url.code {

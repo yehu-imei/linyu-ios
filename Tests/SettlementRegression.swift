@@ -129,5 +129,25 @@ enum SettlementRegression {
             let r = SettlementReconciler.reconcile(pending: [p], bills: [other, own], defaultProject: project, nowMs: now)
             check(r.updates.first?.amount == 0.12, "账单单号相同也只能用原项目账户对账")
         }
+
+        do {
+            let previous = PendingSettlementStore.all()
+            defer { PendingSettlementStore.save(previous) }
+            PendingSettlementStore.clearAll()
+            let old = pending(orderNo: "old", name: "3层-320", startedAt: now - 2_000, createdAt: now - 1_000)
+            let new = pending(orderNo: "new", name: "3层-320", startedAt: now - 1_000, createdAt: now)
+            PendingSettlementStore.record(old)
+            PendingSettlementStore.record(new)
+            check(PendingSettlementStore.all().count == 2, "同一设备的两笔已关闭订单独立保存")
+            PendingSettlementStore.clear(old)
+            check(PendingSettlementStore.all() == [new], "旧单迟到清结算时保留新单待对账")
+        }
+
+        for invalid in [#"-1"#, #""NaN""#, #""Infinity""#, "true"] {
+            let raw = #"{"success":true,"data":{"consumeMoney":"# + invalid + "}}"
+            if case .unknown = SettlementEngine.probeMoney(raw) {
+                check(true, "结算忽略无效金额 \(invalid)")
+            } else { check(false, "结算必须忽略无效金额 \(invalid)") }
+        }
     }
 }

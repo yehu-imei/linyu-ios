@@ -16,7 +16,9 @@ enum Prefs {
     static var lastDeviceSnCode = ""
     static var lastDeviceMac = ""
     static var recordedConsume: [String: Double] = [:]
-    static func recordConsume(_ snCode: String, amount: Double) { recordedConsume[snCode] = amount }
+    static func recordConsume(_ snCode: String, amount: Double, atMs: Double = Date().timeIntervalSince1970 * 1000) {
+        recordedConsume[snCode] = amount
+    }
 }
 enum BalanceEstimator {
     static func billTimeMs(_ value: String) -> Double {

@@ -8,6 +8,13 @@ import Foundation
             if !passed { failures += 1 }
         }
         var snapshot = WidgetSnapshot()
+        check(WidgetDisplayPolicy.readoutAction(staleBusy: true, running: true) == .refresh,
+              "状态未知的使用中卡片只刷新")
+        check(WidgetDisplayPolicy.readoutAction(staleBusy: true, running: false) == .refresh,
+              "状态未知的空闲卡片只刷新")
+        check(WidgetDisplayPolicy.readoutAction(staleBusy: false, running: true) == .stop &&
+              WidgetDisplayPolicy.readoutAction(staleBusy: false, running: false) == .bills,
+              "正常组件仍能关闭用水或打开账单")
         check(snapshot.emptyTitle == "未登录", "无账户且没有同步错误才显示未登录")
         snapshot.message = "小组件无法同步，请检查安装权限"
         check(snapshot.emptyTitle == "等待同步", "共享权限错误不误报退出登录")

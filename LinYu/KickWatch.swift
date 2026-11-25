@@ -11,8 +11,7 @@ import Foundation
 /// 这里每 25 秒问一次 `/account/wallet`：
 /// - 成功：**顺手把钱包余额刷新了**（这条心跳反正要跑，不加请求量，
 ///   却让余额在洗完澡后自动跟上，不用等用户下拉刷新）
-/// - 失败：只有「401/403」和明确的失效文案才算挤号。网络错误不算 ——
-///   断网时把用户踢下线是最糟糕的处理
+/// - 失败：ApiClient 统一处理会话失效，和刷新或操作设备共用同一个弹窗。
 ///
 /// ⚠️ 生命周期跟随主界面（`MainTabView`）：退到登录页就该停，别在后台空转。
 @MainActor
@@ -22,14 +21,6 @@ final class KickWatch: ObservableObject {
     static let intervalSec: UInt64 = 25
 
     private var task: Task<Void, Never>?
-
-    /// 服务端用来表示「登录失效」的文案关键词。
-    ///
-    /// ⚠️ 只能靠文案兜底：服务端这类响应没有独立 errorCode
-    /// （Android 那边也是同一份关键词表，别自己发明新的）。
-    private static let kickKeywords = [
-        "登录", "token", "失效", "过期", "认证", "未登录", "请重新",
-    ]
 
     func start() {
         guard task == nil else { return }
@@ -54,27 +45,8 @@ final class KickWatch: ObservableObject {
         guard Session.shared.isLoggedIn, Session.shared.kickedReason == nil else { return }
 
         let generation = Session.shared.requestGeneration
-        let probe = await BillService.probeWallet()
-        guard !Task.isCancelled, generation == Session.shared.requestGeneration else { return }
-
-        if probe.ok {
-            // 顺手刷新余额（对照 Android：心跳里带上余额）
-            if let v = probe.wallet?.moneyYuan {
-                Prefs.walletBalance = String(v)
-            }
-            return
-        }
-
-        if probe.code == 401 || probe.code == 403 {
-            Session.shared.kickOut(reason: probe.message ?? "登录已失效，请重新登录")
-            return
-        }
-
-        // ⚠️ 网络异常/超时 **不算** 挤号。Android 的 checkKickEx 也只认 401/403
-        guard let message = probe.message, !message.isEmpty else { return }
-        for keyword in Self.kickKeywords where message.contains(keyword) {
-            Session.shared.kickOut(reason: message)
-            return
-        }
+        let wallet = await BillService.loadWallet()
+        guard SessionWork.isCurrent(generation), let value = wallet?.moneyYuan else { return }
+        Prefs.walletBalance = String(value)
     }
 }

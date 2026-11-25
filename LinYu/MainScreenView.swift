@@ -367,7 +367,7 @@ struct MainScreenView: View {
                 cornerRadius: 14,
                 emojiSize: 22,
                 iconSize: 26,
-                background: DeviceGlyph.background(for: record.deviceEmoji, defaultColor: colors.accent)
+                background: DeviceGlyph.background(for: record.deviceEmoji)
             )
 
             VStack(alignment: .leading, spacing: 4) {

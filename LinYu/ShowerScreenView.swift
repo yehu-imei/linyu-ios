@@ -4,9 +4,6 @@ import SwiftUI
 ///
 /// 布局是**垂直居中**的一列：图标 → 状态 → 位置 → 预扣卡片 → 计时 → 结束按钮。
 /// 背景是纵向渐变（浅色冷蓝 `E3F2FD→90CAF9`、深色靛蓝 `1A237E→3949AB`），不是纯色。
-///
-/// ⚠️ 左下角那行「费率 0.041元/升」是硬编码的说明文字，Android 也是写死的
-/// （服务端费率不在本地，写死的是**这个项目的默认费率**，仅作参考）。
 struct ShowerScreenView: View {
     let emoji: String
     let statusText: String
@@ -142,7 +139,7 @@ struct ShowerScreenView: View {
                     .shadow(color: Color(hex: 0xE53935).opacity(0.25), radius: 4, y: 2)
                     .padding(.top, 48)
 
-                    Text("费率: 0.041元/升 · 设备: \(String(location.suffix(6)))")
+                    Text("设备: \(String(location.suffix(6)))")
                         .font(.system(size: 11))
                         .foregroundStyle(colors.textSecondary)
                         .multilineTextAlignment(.center)

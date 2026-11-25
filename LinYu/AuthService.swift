@@ -2,6 +2,10 @@ import Foundation
 
 /// 登录相关接口
 enum AuthService {
+    // 发码接口只使用业务状态，忽略不同版本的 data 形状。
+    private struct VerificationData: Decodable {
+        init(from _: Decoder) throws {}
+    }
 
     /// 密码登录
     ///
@@ -60,12 +64,13 @@ enum AuthService {
         AppLog.shared.i("请求短信验证码 \(phone)")
 
         // 注意：verification 接口在 ApiClient 里会跳过 auth 拼接
-        _ = try await ApiClient.get("/user/verification/code/get", query: [
+        let data = try await ApiClient.get("/user/verification/code/get", query: [
             "telephone": phone,
             "secret": secret,
             "typeId": String(typeId),
             "platform": "1"
         ], tag: "smsCode")
+        _ = try ApiClient.decode(VerificationData.self, from: data, path: "smsCode")
     }
 
     // MARK: - 工具

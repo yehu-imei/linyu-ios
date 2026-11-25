@@ -62,6 +62,8 @@ struct ApiClient {
         try Task.checkCancellation()
         let generation = Session.shared.requestGeneration
         try validateGeneration(generation)
+        let usesCurrentSession = Session.shared.isLoggedIn &&
+            (body["loginCode"] as? String) == Session.shared.authFields["loginCode"]
         guard let url = URL(string: baseURL + path) else {
             throw ApiError.transport("请求地址无效")
         }
@@ -87,10 +89,8 @@ struct ApiClient {
                 "HTTP \(code) POST(json) \(path) (\(ms)ms)\(tag.map { " [\($0)]" } ?? "")",
                 "req: \(preview)\nresp: \(text.prefix(600))"
             )
-            if code == 401 || code == 403 {
-                throw ApiError.unauthorized(status: code)
-            }
-            guard (200..<300).contains(code) else { throw ApiError.http(status: code) }
+            try await validateResponse(data, status: code, path: path, authenticated: usesCurrentSession,
+                                       project: nil, generation: generation)
             return data
         } catch is CancellationError {
             throw CancellationError()
@@ -114,6 +114,7 @@ struct ApiClient {
         try Task.checkCancellation()
         let generation = Session.shared.requestGeneration
         try validateGeneration(generation)
+        let usesCurrentSession = withAuth && Session.shared.isLoggedIn
         var fields = form
         if withAuth {
             for (k, v) in try authFields(project: project, generation: generation) { fields[k] = v }
@@ -155,12 +156,8 @@ struct ApiClient {
                 "HTTP \(code) POST \(path) (\(ms)ms)\(tag.map { " [\($0)]" } ?? "")",
                 "headers: \(headerDump)\n\(sigInfo)\nreq: \(bodyPreview)\nresp: \(text.prefix(600))"
             )
-            // 对照 Android：Retrofit 遇到 401/403 抛 HttpException，上层据此判挤号。
-            // 这里不抛的话，挤号只能靠业务文案识别，漏判率更高。
-            if code == 401 || code == 403 {
-                throw ApiError.unauthorized(status: code)
-            }
-            guard (200..<300).contains(code) else { throw ApiError.http(status: code) }
+            try await validateResponse(data, status: code, path: path, authenticated: usesCurrentSession,
+                                       project: project, generation: generation)
             return data
         } catch is CancellationError {
             throw CancellationError()
@@ -188,7 +185,8 @@ struct ApiClient {
         }
         var items = comps.queryItems ?? []
         var fields = query
-        if Session.shared.isLoggedIn && !path.contains("verification") {
+        let usesCurrentSession = Session.shared.isLoggedIn && !path.contains("verification")
+        if usesCurrentSession {
             for (k, v) in try authFields(project: project, generation: generation) { fields[k] = v }
         } else if project != nil {
             throw ApiError.notLoggedIn
@@ -213,10 +211,8 @@ struct ApiClient {
                 "HTTP \(code) GET \(path) (\(ms)ms)\(tag.map { " [\($0)]" } ?? "")",
                 "resp: \(text.prefix(400))"
             )
-            if code == 401 || code == 403 {
-                throw ApiError.unauthorized(status: code)
-            }
-            guard (200..<300).contains(code) else { throw ApiError.http(status: code) }
+            try await validateResponse(data, status: code, path: path, authenticated: usesCurrentSession,
+                                       project: project, generation: generation)
             return data
         } catch is CancellationError {
             throw CancellationError()
@@ -230,6 +226,52 @@ struct ApiClient {
     }
 
     // MARK: - 内部
+
+    private struct SessionFailureResponse: Decodable {
+        let success: Bool?
+        let errorCode: AnyNumber?
+        let errorMessage: String?
+        let msg: String?
+
+        var expiryReason: String? {
+            guard success == false else { return nil }
+            return [errorMessage, msg].compactMap { $0 }.first(where: LoginFeedback.isSessionExpiredMessage)
+        }
+    }
+
+    private static func validateResponse(
+        _ data: Data, status: Int, path: String, authenticated: Bool, project: ProjectAuthContext?, generation: UUID
+    ) async throws {
+        let isUnauthorized = status == 401 || status == 403
+        let isSuccessStatus = (200..<300).contains(status)
+        if authenticated && (isUnauthorized || isSuccessStatus) {
+            let isDefaultProject = project.map {
+                let fields = Session.shared.authFields
+                return $0.projectId == fields["projectId"] && $0.accountId == fields["accountId"]
+            } ?? true
+            let response = try? JSONDecoder().decode(SessionFailureResponse.self, from: data)
+            // 保留钱包心跳对 HTTP 200 响应内 401 / 403 的识别。
+            let errorCode = response?.errorCode?.value
+            let walletSessionRejected = path == "/account/wallet" && response?.success == false &&
+                (errorCode == 401 || errorCode == 403)
+            // 单个关联项目的 401/403 也可能只是该项目无权限，需有明确的登录失效文案。
+            let reason = response?.expiryReason ??
+                ((isUnauthorized || walletSessionRejected) && isDefaultProject ? "登录已失效，请重新登录" : nil)
+            if let reason {
+                let endedCurrentSession = await MainActor.run {
+                    guard SessionWork.isCurrent(generation) else { return false }
+                    Session.shared.kickOut(reason: reason)
+                    return true
+                }
+                guard endedCurrentSession else { throw CancellationError() }
+                if isUnauthorized { throw ApiError.unauthorized(status: status) }
+                throw CancellationError()
+            }
+        }
+        try validateGeneration(generation)
+        if isUnauthorized { throw ApiError.unauthorized(status: status) }
+        guard isSuccessStatus else { throw ApiError.http(status: status) }
+    }
 
     private static func validateGeneration(_ generation: UUID) throws {
         try Task.checkCancellation()

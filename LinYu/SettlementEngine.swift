@@ -1,3 +1,4 @@
+import CoreFoundation
 import Foundation
 
 /// 「这一单花了多少钱」的查询与回退 —— 逐条对照 Android 的 `data/SettlementEngine.kt`。
@@ -20,24 +21,18 @@ enum SettlementEngine {
     /// 查出本次消费金额。
     ///
     /// - Returns: 金额（元）。`0.0` = 确实没花钱；`nil` = **还没查出来**（和 0 不是一回事）
-    @MainActor static func settleAmount(
-        orderNo: String,
-        startTimeMs: Int64,
-        snCode: String,
-        deviceName: String = "",
-        project: ProjectAuthContext? = nil
-    ) async -> Double? {
+    @MainActor static func settleAmount(_ order: PendingSettlement, project: ProjectAuthContext) async -> Double? {
         let generation = SessionWork.generation ?? Session.shared.requestGeneration
-        guard SessionWork.isCurrent(generation) else { return nil }
-        let route: ProjectAuthContext
-        if let project {
-            route = project
-        } else if let known = try? await ProjectAuthRepository.context(snCode: snCode) {
-            route = known
-        } else {
-            return nil
+        guard project.generation == generation, SessionWork.isCurrent(generation),
+              order.projectId == project.projectId, order.accountId == project.accountId,
+              order.authOwner == project.owner else { return nil }
+        let orderNo = order.orderNo
+        let snCode = order.snCode
+        func complete(_ amount: Double) -> Double {
+            Prefs.recordConsume(snCode, amount: amount, atMs: order.consumptionTime)
+            PendingSettlementStore.clear(order)
+            return amount
         }
-        guard route.generation == generation, SessionWork.isCurrent(generation) else { return nil }
         var sawDefiniteZero = false
 
         if !orderNo.isEmpty {
@@ -45,14 +40,12 @@ enum SettlementEngine {
             //    实测（Android 27 次调用）第 1 轮就是终值，不能让有消费的单子干等。
             probe: for attempt in 0 ..< probeRounds {
                 guard SessionWork.isCurrent(generation) else { return nil }
-                let result = await queryConsumeResult(orderNo: orderNo, snCode: snCode, project: route)
+                let result = await queryConsumeResult(orderNo: orderNo, snCode: snCode, project: project)
                 guard SessionWork.isCurrent(generation) else { return nil }
                 switch result {
                 case let .found(v):
-                    Prefs.recordConsume(snCode, amount: v)
-                    PendingSettlementStore.clear(snCode: snCode)
                     AppLog.shared.i("结算命中（consumeOrder/result，第 \(attempt + 1) 轮）：¥\(MoneyFormat.format(v))")
-                    return v
+                    return complete(v)
                 case .knownZero:
                     sawDefiniteZero = true
                     // 字段在、值是 0 —— 交给下面的零确认，别急着下结论
@@ -78,13 +71,11 @@ enum SettlementEngine {
                 for attempt in 0 ..< zeroConfirmRounds {
                     try? await Task.sleep(nanoseconds: UInt64(zeroConfirmDelayMs) * 1_000_000)
                     guard SessionWork.isCurrent(generation) else { return nil }
-                    let zeroProbe = await queryConsumeResult(orderNo: orderNo, snCode: snCode, project: route)
+                    let zeroProbe = await queryConsumeResult(orderNo: orderNo, snCode: snCode, project: project)
                     guard SessionWork.isCurrent(generation) else { return nil }
                     if case let .found(v) = zeroProbe {
-                        Prefs.recordConsume(snCode, amount: v)
-                        PendingSettlementStore.clear(snCode: snCode)
                         AppLog.shared.i("结算命中（零确认第 \(attempt + 1) 轮）：¥\(MoneyFormat.format(v))")
-                        return v
+                        return complete(v)
                     }
                 }
             }
@@ -93,8 +84,7 @@ enum SettlementEngine {
 
         // ③ 回退：拉账单列表自己匹配
         guard SessionWork.isCurrent(generation) else { return nil }
-        let probe = await settleFromBillList(orderNo: orderNo, startTimeMs: startTimeMs, snCode: snCode,
-                                             deviceName: deviceName, project: route)
+        let probe = await settleFromBillList(order, project: project)
         guard SessionWork.isCurrent(generation) else { return nil }
 
         // 账单列表也没查到金额时，要靠**两种不同的信息**下结论：
@@ -113,32 +103,8 @@ enum SettlementEngine {
             AppLog.shared.w("结算：账单已出现但金额未填，按「未结算完」处理（不判无消费）")
         }
 
-        // 待对账登记：**只要不是铁板钉钉的金额**就留一条记录。
-        //
-        // 那个靠 `sawDefiniteZero` 推断出来的 0.0 也一样 —— 它是「接口说 0 + 账单从未出现」，
-        // 已是最可信的零消费判据，但仍然是推断（万一账单生成得特别慢）。
-        // 登记之后拿账单列表复核：复核到就补金额，复核不到就维持原判。
-        let needsReconcile = resolved == nil || (resolved == 0.0 && sawDefiniteZero)
-        if needsReconcile {
-            PendingSettlementStore.record(PendingSettlement(
-                snCode: snCode,
-                orderNo: orderNo,
-                startedAt: startTimeMs,
-                deviceName: deviceName,
-                createdAt: Int64(Date().timeIntervalSince1970 * 1000),
-                elapsedSec: startTimeMs > 0
-                    ? Int((Int64(Date().timeIntervalSince1970 * 1000) - startTimeMs) / 1000)
-                    : 0,
-                projectId: route.projectId,
-                accountId: route.accountId,
-                authOwner: route.owner
-            ))
-            if resolved == 0.0 {
-                AppLog.shared.w("结算：接口说 0 且账单从未出现，按真零消费处理，同时留一条待对账")
-            }
-        } else {
-            PendingSettlementStore.clear(snCode: snCode)
-        }
+        // 关阀时已登记。只确认正消费后才清这笔记录，避免并发复核后重建旧记录。
+        if let resolved, resolved > 0 { return complete(resolved) }
         return resolved
     }
 
@@ -198,7 +164,7 @@ enum SettlementEngine {
         for scope in scopes {
             for key in ["consumeMoney", "consumeMoneyStr", "money", "consumeAmount"] {
                 guard let el = scope[key], !(el is NSNull) else { continue }
-                guard let rawValue = numberValue(el) else { continue }
+                guard let rawValue = numberValue(el), rawValue.isFinite, rawValue >= 0 else { continue }
                 let v = toYuan(rawValue)
                 if v > 0 {
                     AppLog.shared.i("结算：`\(key)` 原始值 \(rawValue) → ¥\(v)（按 1000 厘/元 换算）")
@@ -216,7 +182,7 @@ enum SettlementEngine {
                 let k = key.lowercased()
                 guard k.range(of: amountKeyHint, options: .regularExpression) != nil,
                       k.range(of: amountKeyExclude, options: .regularExpression) == nil,
-                      let rawValue = numberValue(el)
+                      let rawValue = numberValue(el), rawValue.isFinite
                 else { continue }
                 let v = toYuan(rawValue)
                 if v > 0 {
@@ -233,9 +199,7 @@ enum SettlementEngine {
     }
 
     private static func numberValue(_ el: Any) -> Double? {
-        if let d = el as? Double { return d }
-        if let i = el as? Int { return Double(i) }
-        if let n = el as? NSNumber { return n.doubleValue }
+        if let n = el as? NSNumber, CFGetTypeID(n) != CFBooleanGetTypeID() { return n.doubleValue }
         if let s = el as? String { return Double(s) }
         return nil
     }
@@ -262,13 +226,12 @@ enum SettlementEngine {
     }
 
     @MainActor private static func settleFromBillList(
-        orderNo: String,
-        startTimeMs: Int64,
-        snCode: String,
-        deviceName: String,
+        _ order: PendingSettlement,
         project: ProjectAuthContext
     ) async -> BillProbe {
-        let ended = Date()
+        let ended = Date(timeIntervalSince1970: Double(order.createdAt) / 1000)
+        let orderNo = order.orderNo
+        let startTimeMs = order.startedAt
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "yyyy-MM"
@@ -285,7 +248,7 @@ enum SettlementEngine {
             var succeeded = true
             for month in months {
                 guard SessionWork.isCurrent(project.generation) else { return probe }
-                if let rows = try? await BillService.loadMonth(month, project: project, requestType: "2") {
+                if let rows = try? await BillService.loadMonth(month, project: project) {
                     bills += rows
                 } else {
                     succeeded = false
@@ -294,7 +257,7 @@ enum SettlementEngine {
             }
             guard SessionWork.isCurrent(project.generation) else { return probe }
             let matched = SettlementReconciler.match(BillHistoryCache.newestFirst(bills),
-                orderNo: orderNo, deviceName: deviceName, from: windowStart, until: windowEnd)
+                orderNo: orderNo, deviceName: order.deviceName, from: windowStart, until: windowEnd)
             // 部分失败时仍保留见过的占位账单。只有精确单号能在此情况下确认正消费。
             if !succeeded && orderNo.isEmpty {
                 if matched != nil { probe.sawBill = true }
@@ -302,7 +265,6 @@ enum SettlementEngine {
                 probe.observe(matched, succeeded: true)
             }
             if let amount = probe.amount {
-                Prefs.recordConsume(snCode, amount: amount)
                 AppLog.shared.i("结算命中（账单列表，第 \(attempt + 1) 轮）：¥\(MoneyFormat.format(amount))")
                 return probe
             }

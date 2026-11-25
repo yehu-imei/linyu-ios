@@ -50,12 +50,15 @@ enum SessionIsolationRegression {
         ApiClient.postResponse = #"{"success":true,"data":{"consumeMoney":5000}}"#
         ApiClient.onPost = { Session.shared.requestGeneration = UUID() }
         Prefs.recordedConsume.removeValue(forKey: "stale-device")
-        let project = try? ProjectAuthRepository.defaultContext()
-        let result = await SettlementEngine.settleAmount(
-            orderNo: "old", startTimeMs: 1, snCode: "stale-device", project: project
-        )
+        let project = try! ProjectAuthRepository.defaultContext()
+        let closed = PendingSettlement(snCode: "stale-device", orderNo: "old", startedAt: 1,
+            deviceName: "热水器", createdAt: 2, projectId: project.projectId,
+            accountId: project.accountId, authOwner: project.owner)
+        PendingSettlementStore.record(closed)
+        let result = await SettlementEngine.settleAmount(closed, project: project)
         check(result == nil && Prefs.recordedConsume["stale-device"] == nil, "结算响应期间换号不记金额")
-        check(ApiClient.postPaths.count == 1 && PendingSettlementStore.all().isEmpty, "失效结算不再重试或登记待对账")
+        check(ApiClient.postPaths.count == 1 && PendingSettlementStore.all() == [closed], "失效结算不再重试，保留已登记的关阀恢复")
+        PendingSettlementStore.clearAll()
         ApiClient.onPost = nil
         ApiClient.postPaths = []
         ApiClient.onPost = { Session.shared.requestGeneration = UUID() }
