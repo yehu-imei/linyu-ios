@@ -63,7 +63,7 @@ enum KlcxkjCrypto {
                     return CCCrypt(
                         CCOperation(kCCDecrypt),
                         CCAlgorithm(kCCAlgorithmAES),
-                        CCOptions(0),                 // 无填充
+                        CCOptions(kCCOptionECBMode),  // ECB；填充由调用方处理
                         keyPtr, keyData.count,
                         nil,                          // ECB 不需要 IV
                         dataPtr, data.count,

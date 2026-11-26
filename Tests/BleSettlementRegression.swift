@@ -3,6 +3,10 @@ import Foundation
 enum BleSettlementRegression {
     @MainActor
     static func run(check: (Bool, String) -> Void) async {
+        // 使用独立 AES 实现生成的多块合成向量，防止 iOS 回退到默认 CBC。
+        let encryptedFixture = "NlCkd/6YufeKIj3Oc++mjk1L5C+Ll64iaN1VgUKUfsDZNj7pe9t6rUxmHF0CZS5s"
+        check(KlcxkjCrypto.decryptByAes(encryptedFixture) == "fixture-00112233445566778899AABBCCDDEEFF",
+              "多块结算写回数据按 ECB 解密并移除填充")
         for state: Int? in [1, 3, 6, nil] {
             let cleared = await BleSettlementCleanup.confirm(isCurrent: { true }, writeBack: {}, readState: { state })
             check(!cleared, "写回 ACK 不代替空闲确认：\(String(describing: state))")

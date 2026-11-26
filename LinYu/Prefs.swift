@@ -189,9 +189,13 @@ enum Prefs {
     static func autoDisconRemain(_ snCode: String) -> Int {
         guard !snCode.isEmpty else { return 0 }
         let deadline = d.double(forKey: "autoDiscon_\(snCode)")
-        guard deadline > 0 else { return 0 }
-        let remain = Int((deadline - Date().timeIntervalSince1970 * 1000) / 1000)
-        return max(0, remain)
+        return AutoCloseDeadline.remainingSeconds(deadlineMs: deadline, nowMs: Date().timeIntervalSince1970 * 1000)
+    }
+
+    static func isAutoDisconDue(_ snCode: String) -> Bool {
+        guard !snCode.isEmpty else { return false }
+        let deadline = d.double(forKey: "autoDiscon_\(snCode)")
+        return AutoCloseDeadline.isDue(deadlineMs: deadline, nowMs: Date().timeIntervalSince1970 * 1000)
     }
 
     static func setAutoDisconRemain(_ snCode: String, seconds: Int) {

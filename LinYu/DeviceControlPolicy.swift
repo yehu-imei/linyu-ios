@@ -1,5 +1,25 @@
 import Foundation
 
+enum ShowerChannel {
+    /// 云端 `tcpDevice/*`：服务端推给设备。
+    case cloud
+    /// 蓝牙 `bluetooth/*`：手机当网关。
+    case ble
+
+    var usesAppAutoClose: Bool { self == .cloud }
+}
+
+enum AutoCloseDeadline {
+    static func remainingSeconds(deadlineMs: Double, nowMs: Double) -> Int {
+        guard deadlineMs > nowMs else { return 0 }
+        return Int(ceil((deadlineMs - nowMs) / 1_000))
+    }
+
+    static func isDue(deadlineMs: Double, nowMs: Double) -> Bool {
+        deadlineMs > 0 && nowMs >= deadlineMs
+    }
+}
+
 /// Android 通知 PendingIntent 携带 snCode；iOS 还保存订单身份，拒绝旧通知操作新订单。
 struct DeviceNotificationTarget: Equatable {
     let accountKey: String
