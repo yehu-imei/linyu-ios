@@ -12,22 +12,19 @@ struct DialogScrim<Content: View>: View {
     @ViewBuilder let content: Content
 
     var body: some View {
-        ZStack {
-            Color.black.opacity(0.38)
-                .ignoresSafeArea()
-                .onTapGesture { onTapOutside?() }
-                // 不允许点外部关闭的弹窗也必须挡住底层按钮。
-                .allowsHitTesting(true)
+        GeometryReader { geometry in
+            ZStack {
+                Color.black.opacity(0.38)
+                    .ignoresSafeArea()
+                    .onTapGesture { onTapOutside?() }
 
-            content
-                .padding(.horizontal, 28)
+                content
+                    .padding(.horizontal, 28)
+                    .frame(width: geometry.size.width, height: geometry.size.height)
+            }
         }
-        // ⚠️ 关键：容器本身也要铺满整个窗口。
-        // 只给里面的 Color 加 ignoresSafeArea 不够 —— ZStack 仍会被父视图
-        // 按安全区布局，遮罩就只在中间一块（真机反馈：四周露出没压暗的区域）。
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .ignoresSafeArea()
-        // 不允许点外部关闭的弹窗也必须拦住底层点击
+        // 用整块屏幕定位，键盘弹出时仍为表单保留可用空间。
+        .ignoresSafeArea(.container)
         .contentShape(Rectangle())
     }
 }

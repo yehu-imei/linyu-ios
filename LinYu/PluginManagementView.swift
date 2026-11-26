@@ -2,14 +2,6 @@ import Foundation
 import SwiftUI
 import UniformTypeIdentifiers
 
-private struct PluginCardPositions: PreferenceKey {
-    static let defaultValue: [String: CGFloat] = [:]
-
-    static func reduce(value: inout [String: CGFloat], nextValue: () -> [String: CGFloat]) {
-        value.merge(nextValue()) { _, latest in latest }
-    }
-}
-
 @MainActor
 struct PluginManagementView: View {
     @Environment(\.appColors) private var colors
@@ -23,23 +15,26 @@ struct PluginManagementView: View {
     let onMessage: (String) -> Void
 
     private static let listSpace = "installedPluginList"
+    private static let cardHeight: CGFloat = 66
+    private static let cardSpacing: CGFloat = 10
+    private static let cardStride = cardHeight + cardSpacing
 
     private enum Page {
         case management
         case repository
-        case details(PluginManifest, fromRepository: Bool)
 
         var title: String {
             switch self {
             case .management: return "插件管理"
             case .repository: return "插件仓库"
-            case .details: return "插件详情"
             }
         }
     }
 
     private struct CardDrag {
-        let id: String
+        let pluginID: String
+        let sourceIndex: Int
+        let targetIndex: Int
         let offset: CGFloat
     }
 
@@ -50,14 +45,20 @@ struct PluginManagementView: View {
     @State private var authorRefresh = 0
     @State private var githubLogins: [Int64: String] = [:]
     @State private var selection: Set<String>?
+    @State private var detailPlugin: PluginManifest?
     @State private var pendingDeletion: [String]?
     @State private var request: Task<Void, Never>?
-    @State private var cardPositions: [String: CGFloat] = [:]
     @GestureState private var drag: CardDrag? = nil
 
     private var busy: Bool { request != nil }
     private var selecting: Bool { selection != nil }
     private var canReorder: Bool { installed.count > 1 && !busy && !selecting }
+    private var showingDialog: Bool { detailPlugin != nil || pendingDeletion != nil }
+    private var activeDrag: CardDrag? {
+        guard let drag, installed.indices.contains(drag.sourceIndex),
+              installed[drag.sourceIndex].id == drag.pluginID else { return nil }
+        return drag
+    }
     private var selectedPlugins: [PluginManifest] {
         installed.filter { selection?.contains($0.id) == true }
     }
@@ -83,9 +84,10 @@ struct PluginManagementView: View {
                 pageContent
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .allowsHitTesting(pendingDeletion == nil)
-            .accessibilityHidden(pendingDeletion != nil)
+            .allowsHitTesting(!showingDialog)
+            .accessibilityHidden(showingDialog)
 
+            if let detailPlugin { pluginDetails(detailPlugin) }
             deleteConfirmation
         }
         .simultaneousGesture(
@@ -147,7 +149,7 @@ struct PluginManagementView: View {
         case .management:
             if selecting {
                 Button(action: updateSelection) {
-                    headerIcon("arrow.down.to.line")
+                    updateIcon
                 }
                 .buttonStyle(InstantButtonStyle())
                 .accessibilityLabel("更新所选插件")
@@ -165,7 +167,7 @@ struct PluginManagementView: View {
                 Button {
                     checkCatalog(reportUpdates: true)
                 } label: {
-                    headerIcon("arrow.down.to.line")
+                    updateIcon
                 }
                 .buttonStyle(InstantButtonStyle())
                 .accessibilityLabel("检查插件更新")
@@ -176,7 +178,7 @@ struct PluginManagementView: View {
                         navigate(to: .repository)
                         checkCatalog(reportUpdates: false)
                     } label: {
-                        Label("浏览插件仓库", systemImage: "cart")
+                        Label("浏览插件仓库", image: "PluginGitHubIcon")
                     }
                     Button {
                         importingFile = true
@@ -198,9 +200,18 @@ struct PluginManagementView: View {
             .buttonStyle(InstantButtonStyle())
             .accessibilityLabel("刷新插件仓库")
             .disabled(busy)
-        case .details:
-            EmptyView()
         }
+    }
+
+    private var updateIcon: some View {
+        Image("PluginUpdateIcon")
+            .renderingMode(.template)
+            .resizable()
+            .scaledToFit()
+            .frame(width: 22, height: 22)
+            .foregroundStyle(colors.textPrimary)
+            .frame(width: 40, height: 40)
+            .contentShape(Rectangle())
     }
 
     private func headerIcon(_ name: String) -> some View {
@@ -215,19 +226,20 @@ struct PluginManagementView: View {
         switch page {
         case .management:
             ScrollView(showsIndicators: false) {
-                VStack(spacing: 10) {
+                VStack(spacing: Self.cardSpacing) {
                     if installed.isEmpty {
                         emptyMessage("暂无已安装的插件")
                     } else {
-                        ForEach(installed) { plugin in installedCard(plugin) }
+                        ForEach(Array(installed.enumerated()), id: \.element.id) { index, plugin in
+                            installedCard(plugin, index: index)
+                        }
                     }
                 }
                 .padding(.horizontal, PageLayout.horizontalInset)
                 .padding(.vertical, 16)
             }
             .coordinateSpace(name: Self.listSpace)
-            .scrollDisabled(drag != nil)
-            .onPreferenceChange(PluginCardPositions.self) { cardPositions = $0 }
+            .scrollDisabled(activeDrag != nil)
             .id("installed-plugin-list")
         case .repository:
             ScrollView(showsIndicators: false) {
@@ -236,26 +248,30 @@ struct PluginManagementView: View {
                     .padding(.vertical, 16)
             }
             .id("repository-plugin-list")
-        case let .details(plugin, _):
-            pluginDetails(plugin)
-                .id(plugin.id)
         }
     }
 
-    private func installedCard(_ plugin: PluginManifest) -> some View {
+    private func installedCard(_ plugin: PluginManifest, index: Int) -> some View {
         let update = availableUpdate(for: plugin)
         let isSelected = selection?.contains(plugin.id) == true
+        let drag = activeDrag
         return HStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 5) {
                 name(plugin)
-                Text("v\(plugin.version)")
-                    .font(.system(size: 13))
-                    .foregroundStyle(colors.textSecondary)
-                    .lineLimit(1)
+                HStack(spacing: 4) {
+                    Text("v\(plugin.version)")
+                        .foregroundStyle(colors.textSecondary)
+                    if update != nil {
+                        Text("（可更新）")
+                            .foregroundStyle(colors.danger)
+                    }
+                }
+                .font(.system(size: 13))
+                .lineLimit(1)
             }
             .padding(.leading, 16)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .frame(height: 66)
+            .frame(height: Self.cardHeight)
             .contentShape(Rectangle())
             .gesture(
                 LongPressGesture(minimumDuration: 0.45)
@@ -287,20 +303,15 @@ struct PluginManagementView: View {
                 .disabled(busy)
             } else {
                 installedMenu(plugin, update: update)
-                reorderHandle(plugin)
+                reorderHandle(plugin, index: index)
             }
         }
         .padding(.trailing, 4)
         .linyuCard(colors)
-        .background {
-            GeometryReader { geometry in
-                Color.clear.preference(key: PluginCardPositions.self, value: [
-                    plugin.id: geometry.frame(in: .named(Self.listSpace)).midY
-                ])
-            }
-        }
-        .offset(y: drag?.id == plugin.id ? drag?.offset ?? 0 : 0)
-        .zIndex(drag?.id == plugin.id ? 1 : 0)
+        .offset(y: cardDragOffset(at: index, drag: drag))
+        .animation(drag != nil && drag?.sourceIndex != index ? .easeOut(duration: 0.16) : nil,
+                   value: drag?.targetIndex)
+        .zIndex(drag?.sourceIndex == index ? 1 : 0)
     }
 
     private func installedMenu(_ plugin: PluginManifest, update: PluginListing?) -> some View {
@@ -309,7 +320,7 @@ struct PluginManagementView: View {
                 guard let update else { return }
                 download(update, updating: true)
             } label: {
-                Label("更新", systemImage: "arrow.down.to.line")
+                Label("更新", image: "PluginUpdateIcon")
             }
             .disabled(update == nil)
             Button(role: .destructive) {
@@ -329,7 +340,7 @@ struct PluginManagementView: View {
         .disabled(busy)
     }
 
-    private func reorderHandle(_ plugin: PluginManifest) -> some View {
+    private func reorderHandle(_ plugin: PluginManifest, index: Int) -> some View {
         Image(systemName: "line.3.horizontal")
             .font(.system(size: 17, weight: .semibold))
             .foregroundStyle(colors.textSecondary.opacity(canReorder ? 1 : 0.35))
@@ -338,22 +349,18 @@ struct PluginManagementView: View {
             .highPriorityGesture(
                 DragGesture(minimumDistance: 4, coordinateSpace: .named(Self.listSpace))
                     .updating($drag) { value, drag, _ in
-                        drag = CardDrag(id: plugin.id, offset: value.translation.height)
+                        let offset = value.translation.height
+                        drag = CardDrag(pluginID: plugin.id, sourceIndex: index,
+                                        targetIndex: destinationIndex(from: index, offset: offset), offset: offset)
                     }
                     .onEnded { value in
-                        let target = cardPositions.min { left, right in
-                            let y = value.location.y
-                            let leftCenter = left.key == plugin.id ? value.startLocation.y : left.value
-                            let rightCenter = right.key == plugin.id ? value.startLocation.y : right.value
-                            return abs(leftCenter - y) < abs(rightCenter - y)
-                        }
-                        if let target { onMove(plugin.id, target.key) }
+                        let targetIndex = destinationIndex(from: index, offset: value.translation.height)
+                        if targetIndex != index { onMove(plugin.id, installed[targetIndex].id) }
                     },
                 including: canReorder ? .all : .none
             )
             .accessibilityLabel("拖动排序")
             .accessibilityAdjustableAction { direction in
-                guard let index = installed.firstIndex(where: { $0.id == plugin.id }) else { return }
                 switch direction {
                 case .increment:
                     if index < installed.count - 1 { onMove(plugin.id, installed[index + 1].id) }
@@ -364,6 +371,19 @@ struct PluginManagementView: View {
                 }
             }
             .accessibilityHidden(!canReorder)
+    }
+
+    private func destinationIndex(from index: Int, offset: CGFloat) -> Int {
+        let slots = Int((offset / Self.cardStride).rounded())
+        return min(max(0, index + slots), installed.count - 1)
+    }
+
+    private func cardDragOffset(at index: Int, drag: CardDrag?) -> CGFloat {
+        guard let drag else { return 0 }
+        if index == drag.sourceIndex { return drag.offset }
+        if drag.sourceIndex < index, index <= drag.targetIndex { return -Self.cardStride }
+        if drag.targetIndex <= index, index < drag.sourceIndex { return Self.cardStride }
+        return 0
     }
 
     @ViewBuilder private var repositoryContent: some View {
@@ -406,7 +426,7 @@ struct PluginManagementView: View {
         let canUpdate = current.map { PluginRepository.isUpdate($0, plugin) } ?? false
         return HStack(spacing: 10) {
             Button {
-                navigate(to: .details(plugin, fromRepository: true))
+                detailPlugin = plugin
             } label: {
                 VStack(alignment: .leading, spacing: 4) {
                     name(plugin)
@@ -457,26 +477,28 @@ struct PluginManagementView: View {
         let description = plugin.details
             ?? catalog.first(where: { $0.id == plugin.id })?.manifest.details
             ?? plugin.description
-        return ScrollView(showsIndicators: false) {
-            VStack(alignment: .leading, spacing: 12) {
-                Text(plugin.name)
-                    .font(.system(size: 20, weight: .semibold))
-                    .foregroundStyle(colors.textPrimary)
-                    .accessibilityAddTraits(.isHeader)
-                Text("作者 \(authorName(plugin)) · v\(plugin.version)")
-                    .font(.system(size: 13))
-                    .foregroundStyle(colors.textSecondary)
-                Text(description)
-                    .font(.system(size: 15))
-                    .foregroundStyle(colors.textPrimary)
-                    .lineSpacing(4)
-                    .fixedSize(horizontal: false, vertical: true)
+        let detailText = Text(description)
+            .font(.system(size: 15))
+            .foregroundStyle(colors.textPrimary)
+            .lineSpacing(4)
+            .fixedSize(horizontal: false, vertical: true)
+        return DialogScrim(onTapOutside: { detailPlugin = nil }) {
+            AlertCard(title: plugin.name, titleAlign: .leading,
+                      contentSpacing: 10, actionSpacing: 0, cardPadding: 22) {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("作者 \(authorName(plugin)) · v\(plugin.version)")
+                        .font(.system(size: 13))
+                        .foregroundStyle(colors.textSecondary)
+                    ViewThatFits(in: .vertical) {
+                        detailText
+                        ScrollView { detailText }
+                    }
+                    .frame(maxHeight: 280)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            } actions: {
+                EmptyView()
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(18)
-            .linyuCard(colors)
-            .padding(.horizontal, PageLayout.horizontalInset)
-            .padding(.vertical, 16)
         }
     }
 
@@ -506,7 +528,7 @@ struct PluginManagementView: View {
         if selecting {
             toggleSelection(plugin.id)
         } else {
-            navigate(to: .details(plugin, fromRepository: false))
+            detailPlugin = plugin
         }
     }
 
@@ -539,12 +561,15 @@ struct PluginManagementView: View {
 
     private func navigate(to page: Page) {
         pendingDeletion = nil
+        detailPlugin = nil
         selection = nil
         self.page = page
     }
 
     private func back() {
-        if pendingDeletion != nil {
+        if detailPlugin != nil {
+            detailPlugin = nil
+        } else if pendingDeletion != nil {
             pendingDeletion = nil
         } else if selecting {
             selection = nil
@@ -552,8 +577,6 @@ struct PluginManagementView: View {
             switch page {
             case .management: onDismiss()
             case .repository: navigate(to: .management)
-            case let .details(_, fromRepository):
-                navigate(to: fromRepository ? .repository : .management)
             }
         }
     }

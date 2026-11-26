@@ -30,6 +30,7 @@ targets:
         excludes:
           - Info.plist
           - linyu_bundled_plugins.json
+          - app_logo.png
       # ⚠️ 图片资源**直接放在 LinYu 下**，不要再单独声明一个
       # `LinYu/Resources` 的 source —— 它和外层 `LinYu` 的扫描范围重叠，
       # XcodeGen 生成出来的工程会丢掉 PRODUCT_BUNDLE_IDENTIFIER，

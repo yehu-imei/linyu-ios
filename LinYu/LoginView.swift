@@ -15,6 +15,9 @@ struct LoginView: View {
     @State private var password = ""
     @State private var smsCode = ""
     @State private var isSmsMode = true
+    @State private var rememberPassword = false
+    @State private var savedCredential: SavedCredential.Record?
+    @State private var loadedCredential = false
     @State private var busy = false
     @State private var errorText: String?
     @State private var countdown = 0
@@ -71,11 +74,19 @@ struct LoginView: View {
         .environment(\.colorScheme, .light)
         .transaction { $0.animation = nil; $0.disablesAnimations = true }
         .onAppear {
-            // 回填上次保存的凭据：手机号总是填；密码只有上次是**密码登录**才有。
-            // 验证码是一次性的，不存。
-            if phone.isEmpty, let saved = SavedCredential.phone { phone = saved }
-            if password.isEmpty, let saved = SavedCredential.password { password = saved }
-            if !password.isEmpty { isSmsMode = false }
+            guard !loadedCredential else { return }
+            loadedCredential = true
+            if let saved = SavedCredential.load() {
+                savedCredential = saved
+                if phone.isEmpty {
+                    phone = saved.phone
+                    isSmsMode = false
+                }
+                if phone == saved.phone {
+                    rememberPassword = true
+                    if !isSmsMode && password.isEmpty { password = saved.password }
+                }
+            }
         }
         .onDisappear {
             countdownTask?.cancel()
@@ -83,6 +94,8 @@ struct LoginView: View {
             countdown = 0
             password = ""
             smsCode = ""
+            savedCredential = nil
+            loadedCredential = false
         }
     }
 
@@ -129,7 +142,7 @@ struct LoginView: View {
             Button {
                 isSmsMode.toggle()
                 errorText = nil
-                password = ""
+                password = isSmsMode ? "" : passwordForPhone
                 smsCode = ""
             } label: {
                 Text(isSmsMode ? "密码登录" : "验证码登录")
@@ -155,10 +168,16 @@ struct LoginView: View {
             if isSmsMode { smsField } else { passwordField }
 
             if !isSmsMode {
+                Toggle("记住密码", isOn: Binding(get: { rememberPassword }, set: setRememberPassword))
+                    .font(.system(size: 13))
+                    .foregroundStyle(Color(hex: 0x1A1A1A))
+                    .tint(Color(hex: 0x1A73E8))
+                    .disabled(busy)
+                    .padding(.top, 12)
                 Button("使用已保存的密码") {
                     systemPasswords.choose(onFailure: { errorText = $0 }) { user, secret in
                         guard !busy else { return }
-                        phone = user
+                        updatePhone(user)
                         password = secret
                     }
                 }
@@ -194,7 +213,7 @@ struct LoginView: View {
     private var phoneField: some View {
         outlinedField(
             title: "手机号",
-            text: $phone,
+            text: Binding(get: { phone }, set: updatePhone),
             systemImage: "phone.fill",
             keyboard: isSmsMode ? .numberPad : .default,
             contentType: isSmsMode ? .telephoneNumber : .username,
@@ -322,6 +341,38 @@ struct LoginView: View {
 
     // MARK: - 动作
 
+    private var passwordForPhone: String {
+        guard let savedCredential, savedCredential.phone == phone else { return "" }
+        return savedCredential.password
+    }
+
+    private func updatePhone(_ value: String) {
+        guard !busy, phone != value else { return }
+        let previousPhone = phone
+        phone = value
+        smsCode = ""
+        let matchesSavedPhone = savedCredential?.phone == phone
+        if !isSmsMode {
+            if matchesSavedPhone { password = passwordForPhone }
+            else if previousPhone.count == 11 { password = "" }
+        }
+        if savedCredential?.phone == previousPhone || matchesSavedPhone {
+            rememberPassword = matchesSavedPhone
+        }
+    }
+
+    private func setRememberPassword(_ enabled: Bool) {
+        guard !busy else { return }
+        if !enabled, savedCredential?.phone == phone {
+            guard SavedCredential.clear(for: phone) else {
+                errorText = "无法清除本机密码，请重试"
+                return
+            }
+            savedCredential = nil
+        }
+        rememberPassword = enabled
+    }
+
     private func sendCode() {
         guard phone.count == 11, countdown == 0 else { return }
         let requestedPhone = phone
@@ -361,20 +412,33 @@ struct LoginView: View {
         let submittedPassword = password
         let submittedCode = smsCode
         let submittedSmsMode = isSmsMode
+        let shouldRemember = !submittedSmsMode && rememberPassword
         Task {
             defer { busy = false }
             do {
                 let data = submittedSmsMode
                     ? try await AuthService.smsLogin(phone: submittedPhone, smsCode: submittedCode)
                     : try await AuthService.login(phone: submittedPhone, password: submittedPassword)
-                // 验证码是一次性的，只有密码登录才存——下次打开自动填好，一键登录
-                if !submittedSmsMode { SavedCredential.save(phone: submittedPhone, password: submittedPassword) }
+                if shouldRemember {
+                    if !SavedCredential.save(.init(phone: submittedPhone, password: submittedPassword)) {
+                        AppLog.shared.w("无法在本机保存密码")
+                        forgetOtherAccount(submittedPhone)
+                    }
+                } else {
+                    forgetOtherAccount(submittedPhone)
+                }
                 // 输入框在退出登录页时统一清空，让 iOS 在验证成功前后看到同一组凭据。
                 AuthService.persist(data, phone: submittedPhone)
             } catch {
                 if submittedSmsMode { smsCode = "" } else { password = "" }
                 errorText = Self.friendly(error)
             }
+        }
+    }
+
+    private func forgetOtherAccount(_ submittedPhone: String) {
+        if let savedCredential, savedCredential.phone != submittedPhone {
+            SavedCredential.clear(for: savedCredential.phone)
         }
     }
 

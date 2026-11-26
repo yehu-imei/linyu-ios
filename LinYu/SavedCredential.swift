@@ -1,85 +1,79 @@
 import Foundation
 import Security
 
-/// 登录凭据的本地保存 —— 用于「下次一键登录」。
-///
-/// ## 为什么单独一个 service
-///
-/// 和 `Session` 的 `com.hualala.linyu.session` 分开：退出登录会清 Session，
-/// 但**不该顺手把用户存的密码也删掉**——否则每次重登都要重新输，
-/// 「记住密码」就名存实亡了。
-///
-/// ## 为什么用 Keychain 而不是 UserDefaults
-///
-/// 密码是明文凭据。UserDefaults 落在 plist 里，越狱/备份能直接读出来；
-/// Keychain 是系统加密存储，而且 `kSecAttrAccessibleWhenUnlockedThisDeviceOnly`
-/// 保证它不会进 iCloud 备份。
+/// 本机 Keychain 保存最近记住的一组凭据。它独立于登录会话，退出后仍可回填。
 enum SavedCredential {
+    struct Record: Codable {
+        let phone: String
+        let password: String
+
+        fileprivate var isValid: Bool { phone.count == 11 && !password.isEmpty }
+    }
 
     private static let service = "com.hualala.linyu.credential"
-    private static let accountPhone = "phone"
-    private static let accountPassword = "password"
+    private static let recordAccount = "remembered-login"
 
-    /// 登录成功后保存。只保存**密码登录**的情况——验证码是一次性的，存它没意义
-    static func save(phone: String, password: String) {
-        guard !phone.isEmpty, !password.isEmpty else { return }
-        set(accountPhone, phone)
-        set(accountPassword, password)
-        AppLog.shared.i("已保存登录凭据（手机号 \(AppLog.mask(phone))）")
+    static func load() -> Record? {
+        if let data = read(recordAccount) {
+            guard let record = try? JSONDecoder().decode(Record.self, from: data), record.isValid else { return nil }
+            return record
+        }
+
+        guard let phoneData = read("phone"), let passwordData = read("password"),
+              let phone = String(data: phoneData, encoding: .utf8),
+              let password = String(data: passwordData, encoding: .utf8) else { return nil }
+        let legacy = Record(phone: phone, password: password)
+        guard legacy.isValid else { return nil }
+        _ = save(legacy)
+        return legacy
     }
 
-    /// 进入登录页时回填的手机号
-    static var phone: String? { read(accountPhone) }
-
-    /// 进入登录页时回填的密码（有值就说明上次是密码登录且用户没清过）
-    static var password: String? { read(accountPassword) }
-
-    /// 退出登录 / 用户主动清除时调用
-    static func clear() {
-        delete(accountPhone)
-        delete(accountPassword)
-    }
-
-    // MARK: - Keychain
-
-    private static func set(_ key: String, _ value: String) {
-        guard let data = value.data(using: .utf8) else { return }
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: key
+    static func save(_ record: Record) -> Bool {
+        guard record.isValid, let data = try? JSONEncoder().encode(record) else { return false }
+        let lookup = query(recordAccount)
+        let attributes: [String: Any] = [
+            kSecValueData as String: data,
+            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly
         ]
-        SecItemDelete(query as CFDictionary)
-        var add = query
-        add[kSecValueData as String] = data
-        // 不进 iCloud 备份：密码明文不该跟着备份走
-        add[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
-        SecItemAdd(add as CFDictionary, nil)
+        var status = SecItemUpdate(lookup as CFDictionary, attributes as CFDictionary)
+        if status == errSecItemNotFound {
+            let item = lookup.merging(attributes) { _, value in value }
+            status = SecItemAdd(item as CFDictionary, nil)
+            if status == errSecDuplicateItem {
+                status = SecItemUpdate(lookup as CFDictionary, attributes as CFDictionary)
+            }
+        }
+        guard status == errSecSuccess else { return false }
+        _ = delete("phone")
+        _ = delete("password")
+        return true
     }
 
-    /// ⚠️ 不能叫 `get`——`get` 是 Swift 计算属性的访问器关键字，
-    /// `{ get(...) }` 会被解析成 getter 声明而报错
-    private static func read(_ key: String) -> String? {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: key,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne
-        ]
+    @discardableResult
+    static func clear(for phone: String) -> Bool {
+        guard load()?.phone == phone else { return true }
+        let legacyPhoneRemoved = delete("phone")
+        let legacyPasswordRemoved = delete("password")
+        return legacyPhoneRemoved && legacyPasswordRemoved && delete(recordAccount)
+    }
+
+    private static func query(_ account: String) -> [String: Any] {
+        [kSecClass as String: kSecClassGenericPassword,
+         kSecAttrService as String: service,
+         kSecAttrAccount as String: account]
+    }
+
+    private static func read(_ account: String) -> Data? {
+        var lookup = query(account)
+        lookup[kSecReturnData as String] = true
+        lookup[kSecMatchLimit as String] = kSecMatchLimitOne
         var item: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
-              let data = item as? Data
-        else { return nil }
-        return String(data: data, encoding: .utf8)
+        guard SecItemCopyMatching(lookup as CFDictionary, &item) == errSecSuccess else { return nil }
+        return item as? Data
     }
 
-    private static func delete(_ key: String) {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: key
-        ]
-        SecItemDelete(query as CFDictionary)
+    private static func delete(_ account: String) -> Bool {
+        let status = SecItemDelete(query(account) as CFDictionary)
+        return status == errSecSuccess || status == errSecItemNotFound
     }
 }

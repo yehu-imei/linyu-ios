@@ -161,7 +161,7 @@ struct ChangePasswordDialog: View {
                 )
             }
             _ = try ApiClient.decode(EmptyData.self, from: raw, path: "changePassword")
-            SavedCredential.save(phone: currentPhone, password: newPwd)
+            SavedCredential.clear(for: currentPhone)
             onSuccess()
             onDismiss()
         } catch {
@@ -290,6 +290,7 @@ struct ChangePhoneDialog: View {
 
     private func submit() async {
         guard canSubmit, !submitting else { return }
+        let previousPhone = Session.shared.telephone
         submitting = true
         errorText = nil
         defer { submitting = false }
@@ -300,7 +301,7 @@ struct ChangePhoneDialog: View {
                 tag: "updatePhone"
             )
             _ = try ApiClient.decode(EmptyData.self, from: raw, path: "updatePhone")
-            SavedCredential.clear()
+            SavedCredential.clear(for: previousPhone)
             // 认证参数里的 telephone 也得跟着换，否则后续请求还在用旧号
             Session.shared.updateTelephone(newPhone)
             onSuccess()
