@@ -102,7 +102,8 @@ struct UserScreenView: View {
 
                 Color.clear.frame(height: 100)
             }
-            .padding(20)
+            .padding(.horizontal, PageLayout.horizontalInset)
+            .padding(.vertical, PageLayout.topInset)
         }
         .clipped()
     }
@@ -159,7 +160,8 @@ struct UserScreenView: View {
 
                 Color.clear.frame(height: 100)
             }
-            .padding(20)
+            .padding(.horizontal, PageLayout.horizontalInset)
+            .padding(.vertical, PageLayout.topInset)
         }
         .clipped()
     }

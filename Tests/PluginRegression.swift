@@ -108,6 +108,13 @@ struct PluginRegression {
                   !RoomBindingPlugin.install(manifest, defaults: defaults) &&
                   RoomBindingPlugin.effectiveRoom(in: defaults) == "已有寝室",
                   "updating keeps the binding and rejects same-version replacement")
+        let firstRoom = PluginManifest(id: manifest.id, name: manifest.name, author: manifest.author,
+                                       version: "1.0.0", description: manifest.description, versionEpoch: 1)
+        try check(PluginRepository.isUpdate(manifest, firstRoom) && !PluginRepository.isUpdate(firstRoom, manifest) &&
+                  InstalledPlugins.install(firstRoom, defaults: defaults) &&
+                  RoomBindingPlugin.installed(in: defaults) == firstRoom &&
+                  RoomBindingPlugin.effectiveRoom(in: defaults) == "已有寝室",
+                  "updates room binding preview to v1.0.0 and keeps its room")
         try check(RoomBindingPlugin.uninstall(defaults: defaults) &&
                   RoomBindingPlugin.installed(in: defaults) == nil &&
                   RoomBindingPlugin.effectiveRoom(in: defaults).isEmpty &&
@@ -121,8 +128,21 @@ struct PluginRegression {
             InstalledPlugins.backgroundID, InstalledPlugins.runtimeLogID
         ]), "ships all five default plugins and keeps room binding optional")
         let trend = bundled.first { $0.id == InstalledPlugins.consumptionTrendID }!.manifest
-        try check(trend.credit == "XiaoLoad" && trend.creditGithubID == 63766325 && trend.author == "LinYu",
-                  "keeps suggestion attribution separate from authorship")
+        try check(trend.author == "XiaoLoad" && trend.authorGithubID == 63766325,
+                  "ships the author and stable GitHub account ID")
+        try check(bundled.allSatisfy {
+            $0.manifest.version == "1.0.0" && $0.manifest.versionEpoch == 1
+                && ($0.manifest.details?.count ?? 0) > $0.manifest.description.count
+        }, "ships v1.0.0 with separate brief and detailed descriptions")
+        let legacyTrend = Data("""
+            {"id":"consumption-trend","name":"消费趋势","author":"LinYu","version":"1.0.0",
+             "description":"查看趋势","formatVersion":1,"capabilities":["bill.consumption-trend"],
+             "credit":"XiaoLoad","creditGithubId":63766325}
+            """.utf8)
+        let preview = try PluginRepository.parsePackage(legacyTrend)
+        try check(preview.author == trend.author && preview.authorGithubID == trend.authorGithubID &&
+                  preview.versionEpoch == 0 && PluginRepository.isUpdate(preview, trend),
+                  "migrates stored author metadata and updates the preview to the first release")
         try check(!InstalledPlugins.install(trend, defaults: defaults, bundled: bundled),
                   "the bundled plugin is already installed")
         try check(InstalledPlugins.uninstall(trend.id, defaults: defaults, bundled: bundled) &&

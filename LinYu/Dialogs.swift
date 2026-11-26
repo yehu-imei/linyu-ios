@@ -394,10 +394,12 @@ struct AutoCloseDialogView: View {
             AlertCard(title: "⚠️ 热水器已自动关闭", titleAlign: .center) {
                 VStack(spacing: 6) {
                     HStack(spacing: 4) {
-                        Text("🚿").font(.system(size: 16))
+                        Text("🚿").font(.system(size: 16)).fixedSize()
                         Text(deviceName)
                             .font(.system(size: 15, weight: .medium))
                             .foregroundStyle(colors.textPrimary)
+                            .lineLimit(1)
+                            .truncationMode(.head)
                     }
                     Text("⏱ 已用 \(elapsedText)")
                         .font(.system(size: 15))

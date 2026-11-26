@@ -2,6 +2,16 @@ import Foundation
 
 enum DeviceControlRegression {
     @MainActor static func run(check: (Bool, String) -> Void) async {
+        check(!ShowerChannel.ble.usesAppAutoClose && ShowerChannel.cloud.usesAppAutoClose,
+              "App 自动关停只适用于云端设备")
+        check(AutoCloseDeadline.remainingSeconds(deadlineMs: 6_000, nowMs: 5_999) == 1 &&
+              !AutoCloseDeadline.isDue(deadlineMs: 6_000, nowMs: 5_999),
+              "距截止还剩不足一秒时继续显示倒计时，不提前关阀")
+        check(AutoCloseDeadline.isDue(deadlineMs: 6_000, nowMs: 6_000) &&
+              AutoCloseDeadline.remainingSeconds(deadlineMs: 6_000, nowMs: 6_000) == 0,
+              "云端订单到真实截止时间才满足关阀条件")
+        check(!AutoCloseDeadline.isDue(deadlineMs: 0, nowMs: 6_000),
+              "没有保存截止时间时不触发自动关阀")
         let a = ActiveOrderRecord(snCode: "A", orderNo: "order-A", deviceName: "A",
                                   deviceMac: "A", deviceEmoji: "", preDeduct: 0)
         let b = ActiveOrderRecord(snCode: "B", orderNo: "order-B", deviceName: "B",

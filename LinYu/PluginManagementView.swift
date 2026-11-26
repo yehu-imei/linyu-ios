@@ -24,9 +24,18 @@ struct PluginManagementView: View {
 
     private static let listSpace = "installedPluginList"
 
-    private enum Panel {
-        case details(PluginManifest)
-        case delete(String)
+    private enum Page {
+        case management
+        case repository
+        case details(PluginManifest, fromRepository: Bool)
+
+        var title: String {
+            switch self {
+            case .management: return "插件管理"
+            case .repository: return "插件仓库"
+            case .details: return "插件详情"
+            }
+        }
     }
 
     private struct CardDrag {
@@ -34,19 +43,24 @@ struct PluginManagementView: View {
         let offset: CGFloat
     }
 
-    @State private var showingMarket = false
+    @State private var page = Page.management
     @State private var importingFile = false
     @State private var catalog = PluginRepository.bundledCatalog
     @State private var catalogFailed = false
-    @State private var creditRefresh = 0
+    @State private var authorRefresh = 0
     @State private var githubLogins: [Int64: String] = [:]
-    @State private var panel: Panel?
+    @State private var selection: Set<String>?
+    @State private var pendingDeletion: [String]?
     @State private var request: Task<Void, Never>?
     @State private var cardPositions: [String: CGFloat] = [:]
-    @GestureState private var drag: CardDrag?
+    @GestureState private var drag: CardDrag? = nil
 
     private var busy: Bool { request != nil }
-    private var canReorder: Bool { installed.count > 1 && !busy }
+    private var selecting: Bool { selection != nil }
+    private var canReorder: Bool { installed.count > 1 && !busy && !selecting }
+    private var selectedPlugins: [PluginManifest] {
+        installed.filter { selection?.contains($0.id) == true }
+    }
     private func availableUpdate(for plugin: PluginManifest) -> PluginListing? {
         catalog.first { PluginRepository.isUpdate(plugin, $0.manifest) }
     }
@@ -66,31 +80,13 @@ struct PluginManagementView: View {
                         .tint(colors.accent)
                         .padding(.horizontal, PageLayout.horizontalInset)
                 }
-                ScrollView(showsIndicators: false) {
-                    LazyVStack(spacing: 10) {
-                        if showingMarket {
-                            marketContent
-                        } else if installed.isEmpty {
-                            emptyMessage("暂无已安装的插件")
-                        } else {
-                            ForEach(installed) { plugin in
-                                installedCard(plugin)
-                            }
-                        }
-                    }
-                    .padding(.horizontal, PageLayout.horizontalInset)
-                    .padding(.top, 16)
-                    .padding(.bottom, 12)
-                }
-                .coordinateSpace(name: Self.listSpace)
-                .scrollDisabled(drag != nil)
-                .onPreferenceChange(PluginCardPositions.self) { cardPositions = $0 }
+                pageContent
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .allowsHitTesting(panel == nil)
-            .accessibilityHidden(panel != nil)
+            .allowsHitTesting(pendingDeletion == nil)
+            .accessibilityHidden(pendingDeletion != nil)
 
-            panelContent
+            deleteConfirmation
         }
         .simultaneousGesture(
             DragGesture(minimumDistance: 30).onEnded { value in
@@ -113,36 +109,63 @@ struct PluginManagementView: View {
                 }
             }
         }
-        .task(id: creditRefresh) {
+        .task(id: authorRefresh) {
             let manifests = installed + catalog.map(\.manifest)
             let logins = await PluginRepository.fetchGithubLogins(manifests)
             guard !Task.isCancelled else { return }
             githubLogins.merge(logins) { _, refreshed in refreshed }
         }
-        .onChange(of: Set(installed.compactMap(\.creditGithubID))) { _ in creditRefresh += 1 }
+        .onChange(of: Set(installed.compactMap(\.authorGithubID))) { _ in authorRefresh += 1 }
         .onDisappear { request?.cancel() }
     }
 
     private var header: some View {
         HStack(spacing: 8) {
             Button(action: back) {
-                headerIcon("chevron.left")
+                headerIcon(selecting ? "xmark" : "chevron.left")
             }
             .buttonStyle(InstantButtonStyle())
-            .accessibilityLabel(showingMarket ? "返回插件管理" : "返回设置")
+            .accessibilityLabel(selecting ? "退出选择" : "返回")
 
-            Text(showingMarket ? "插件仓库" : "插件管理")
+            Text(selection.map { "已选择 \($0.count) 个" } ?? page.title)
                 .font(.system(size: 22, weight: .bold))
                 .foregroundStyle(colors.textPrimary)
                 .accessibilityAddTraits(.isHeader)
 
             Spacer(minLength: 0)
 
-            if !showingMarket {
+            toolbarActions
+        }
+        .frame(height: PageLayout.titleHeight)
+        .frame(height: PageLayout.headerHeight, alignment: .top)
+        .padding(.horizontal, PageLayout.horizontalInset)
+        .padding(.top, PageLayout.topInset)
+    }
+
+    @ViewBuilder private var toolbarActions: some View {
+        switch page {
+        case .management:
+            if selecting {
+                Button(action: updateSelection) {
+                    headerIcon("arrow.down.to.line")
+                }
+                .buttonStyle(InstantButtonStyle())
+                .accessibilityLabel("更新所选插件")
+                .disabled(busy || selectedPlugins.isEmpty)
+
+                Button {
+                    pendingDeletion = selectedPlugins.map(\.id)
+                } label: {
+                    headerIcon("trash")
+                }
+                .buttonStyle(InstantButtonStyle())
+                .accessibilityLabel("删除所选插件")
+                .disabled(busy || selectedPlugins.isEmpty)
+            } else {
                 Button {
                     checkCatalog(reportUpdates: true)
                 } label: {
-                    headerIcon("arrow.clockwise")
+                    headerIcon("arrow.down.to.line")
                 }
                 .buttonStyle(InstantButtonStyle())
                 .accessibilityLabel("检查插件更新")
@@ -150,7 +173,7 @@ struct PluginManagementView: View {
 
                 Menu {
                     Button {
-                        showingMarket = true
+                        navigate(to: .repository)
                         checkCatalog(reportUpdates: false)
                     } label: {
                         Label("浏览插件仓库", systemImage: "cart")
@@ -166,11 +189,18 @@ struct PluginManagementView: View {
                 .accessibilityLabel("添加插件")
                 .disabled(busy)
             }
+        case .repository:
+            Button {
+                checkCatalog(reportUpdates: false, reportRefresh: true)
+            } label: {
+                headerIcon("arrow.clockwise")
+            }
+            .buttonStyle(InstantButtonStyle())
+            .accessibilityLabel("刷新插件仓库")
+            .disabled(busy)
+        case .details:
+            EmptyView()
         }
-        .frame(height: PageLayout.titleHeight)
-        .frame(height: PageLayout.headerHeight, alignment: .top)
-        .padding(.horizontal, PageLayout.horizontalInset)
-        .padding(.top, 20)
     }
 
     private func headerIcon(_ name: String) -> some View {
@@ -181,60 +211,84 @@ struct PluginManagementView: View {
             .contentShape(Rectangle())
     }
 
-    private func installedCard(_ plugin: PluginManifest) -> some View {
-        let update = availableUpdate(for: plugin)
-        return HStack(spacing: 0) {
-            Button {
-                panel = .details(plugin)
-            } label: {
-                VStack(alignment: .leading, spacing: 5) {
-                    name(plugin)
-                    HStack(spacing: 8) {
-                        Text("版本 \(plugin.version)")
-                            .font(.system(size: 13))
-                            .foregroundStyle(colors.textSecondary)
-                        if update != nil {
-                            Text("可更新")
-                                .font(.system(size: 11, weight: .medium))
-                                .foregroundStyle(colors.warning)
-                                .padding(.horizontal, 7)
-                                .padding(.vertical, 2)
-                                .background(colors.warning.opacity(0.14), in: RoundedRectangle(cornerRadius: 6))
-                        }
+    @ViewBuilder private var pageContent: some View {
+        switch page {
+        case .management:
+            ScrollView(showsIndicators: false) {
+                VStack(spacing: 10) {
+                    if installed.isEmpty {
+                        emptyMessage("暂无已安装的插件")
+                    } else {
+                        ForEach(installed) { plugin in installedCard(plugin) }
                     }
                 }
-                .padding(.vertical, 12)
-                .padding(.leading, 16)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .contentShape(Rectangle())
+                .padding(.horizontal, PageLayout.horizontalInset)
+                .padding(.vertical, 16)
             }
-            .buttonStyle(.plain)
+            .coordinateSpace(name: Self.listSpace)
+            .scrollDisabled(drag != nil)
+            .onPreferenceChange(PluginCardPositions.self) { cardPositions = $0 }
+            .id("installed-plugin-list")
+        case .repository:
+            ScrollView(showsIndicators: false) {
+                VStack(spacing: 10) { repositoryContent }
+                    .padding(.horizontal, PageLayout.horizontalInset)
+                    .padding(.vertical, 16)
+            }
+            .id("repository-plugin-list")
+        case let .details(plugin, _):
+            pluginDetails(plugin)
+                .id(plugin.id)
+        }
+    }
 
-            Menu {
-                Button {
-                    guard let update else { return }
-                    download(update, updating: true)
-                } label: {
-                    Label("更新", systemImage: "arrow.clockwise")
-                }
-                .disabled(update == nil)
-                Button(role: .destructive) {
-                    panel = .delete(plugin.id)
-                } label: {
-                    Label("删除", systemImage: "trash")
-                }
-            } label: {
-                Image(systemName: "ellipsis")
-                    .rotationEffect(.degrees(90))
-                    .font(.system(size: 18, weight: .semibold))
+    private func installedCard(_ plugin: PluginManifest) -> some View {
+        let update = availableUpdate(for: plugin)
+        let isSelected = selection?.contains(plugin.id) == true
+        return HStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 5) {
+                name(plugin)
+                Text("v\(plugin.version)")
+                    .font(.system(size: 13))
                     .foregroundStyle(colors.textSecondary)
-                    .frame(width: 40, height: 44)
-                    .contentShape(Rectangle())
+                    .lineLimit(1)
             }
-            .accessibilityLabel("\(plugin.name)操作")
-            .disabled(busy)
+            .padding(.leading, 16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(height: 66)
+            .contentShape(Rectangle())
+            .gesture(
+                LongPressGesture(minimumDuration: 0.45)
+                    .exclusively(before: TapGesture())
+                    .onEnded { value in
+                        switch value {
+                        case .first: selectByLongPress(plugin.id)
+                        case .second: tapInstalled(plugin)
+                        }
+                    }
+            )
+            .accessibilityElement(children: .combine)
+            .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+            .accessibilityAction { tapInstalled(plugin) }
+            .accessibilityAction(named: Text("选择插件")) { selectByLongPress(plugin.id) }
 
-            reorderHandle(plugin)
+            if selecting {
+                Button {
+                    toggleSelection(plugin.id)
+                } label: {
+                    Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                        .font(.system(size: 21))
+                        .foregroundStyle(isSelected ? colors.accent : colors.textSecondary)
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(InstantButtonStyle())
+                .accessibilityLabel(isSelected ? "取消选择\(plugin.name)" : "选择\(plugin.name)")
+                .disabled(busy)
+            } else {
+                installedMenu(plugin, update: update)
+                reorderHandle(plugin)
+            }
         }
         .padding(.trailing, 4)
         .linyuCard(colors)
@@ -247,6 +301,32 @@ struct PluginManagementView: View {
         }
         .offset(y: drag?.id == plugin.id ? drag?.offset ?? 0 : 0)
         .zIndex(drag?.id == plugin.id ? 1 : 0)
+    }
+
+    private func installedMenu(_ plugin: PluginManifest, update: PluginListing?) -> some View {
+        Menu {
+            Button {
+                guard let update else { return }
+                download(update, updating: true)
+            } label: {
+                Label("更新", systemImage: "arrow.down.to.line")
+            }
+            .disabled(update == nil)
+            Button(role: .destructive) {
+                pendingDeletion = [plugin.id]
+            } label: {
+                Label("删除", systemImage: "trash")
+            }
+        } label: {
+            Image(systemName: "ellipsis")
+                .rotationEffect(.degrees(90))
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(colors.textSecondary)
+                .frame(width: 40, height: 44)
+                .contentShape(Rectangle())
+        }
+        .accessibilityLabel("\(plugin.name)操作")
+        .disabled(busy)
     }
 
     private func reorderHandle(_ plugin: PluginManifest) -> some View {
@@ -286,9 +366,12 @@ struct PluginManagementView: View {
             .accessibilityHidden(!canReorder)
     }
 
-    @ViewBuilder private var marketContent: some View {
+    @ViewBuilder private var repositoryContent: some View {
+        let publishedIDs = Set(catalog.map(\.id))
+        let installedOnly = installed.filter { !publishedIDs.contains($0.id) }
+        let isEmpty = catalog.isEmpty && installedOnly.isEmpty
         if catalogFailed {
-            if catalog.isEmpty {
+            if isEmpty {
                 emptyMessage("无法读取插件目录")
                 retryCatalogButton
             } else {
@@ -300,11 +383,14 @@ struct PluginManagementView: View {
                     retryCatalogButton
                 }
             }
-        } else if catalog.isEmpty, !busy {
+        } else if isEmpty, !busy {
             emptyMessage("暂无可用插件")
         }
         ForEach(catalog) { listing in
-            marketCard(listing)
+            repositoryCard(listing.manifest, listing: listing)
+        }
+        ForEach(installedOnly) { plugin in
+            repositoryCard(plugin, listing: nil)
         }
     }
 
@@ -315,28 +401,30 @@ struct PluginManagementView: View {
             .frame(minHeight: 44)
     }
 
-    private func marketCard(_ listing: PluginListing) -> some View {
-        let plugin = listing.manifest
+    private func repositoryCard(_ plugin: PluginManifest, listing: PluginListing?) -> some View {
         let current = installed.first { $0.id == plugin.id }
         let canUpdate = current.map { PluginRepository.isUpdate($0, plugin) } ?? false
         return HStack(spacing: 10) {
             Button {
-                panel = .details(plugin)
+                navigate(to: .details(plugin, fromRepository: true))
             } label: {
                 VStack(alignment: .leading, spacing: 4) {
                     name(plugin)
-                    attribution(plugin, size: 12)
+                    Text("作者 \(authorName(plugin)) · v\(plugin.version)")
+                        .font(.system(size: 12))
+                        .foregroundStyle(colors.textSecondary)
+                        .lineLimit(1)
                     Text(plugin.description)
                         .font(.system(size: 13))
                         .foregroundStyle(colors.textSecondary)
-                        .lineLimit(2)
+                        .lineLimit(1)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
 
-            if current == nil || canUpdate {
+            if let listing, current == nil || canUpdate {
                 Button(canUpdate ? "更新" : "安装") {
                     download(listing, updating: canUpdate)
                 }
@@ -347,6 +435,7 @@ struct PluginManagementView: View {
                 Text("已安装")
                     .font(.system(size: 12))
                     .foregroundStyle(colors.textSecondary)
+                    .frame(minWidth: 55)
             }
         }
         .padding(15)
@@ -360,16 +449,35 @@ struct PluginManagementView: View {
             .lineLimit(1)
     }
 
-    private func attribution(_ plugin: PluginManifest, size: CGFloat) -> some View {
-        let suggestion = plugin.creditGithubID.flatMap { githubLogins[$0] }.map { "@\($0)" } ?? plugin.credit
-        return VStack(alignment: .leading, spacing: 4) {
-            Text("作者 \(plugin.author) · 版本 \(plugin.version)")
-            if let suggestion {
-                Text("功能建议 \(suggestion)")
+    private func authorName(_ plugin: PluginManifest) -> String {
+        plugin.authorGithubID.flatMap { githubLogins[$0] }.map { "@\($0)" } ?? plugin.author
+    }
+
+    private func pluginDetails(_ plugin: PluginManifest) -> some View {
+        let description = plugin.details
+            ?? catalog.first(where: { $0.id == plugin.id })?.manifest.details
+            ?? plugin.description
+        return ScrollView(showsIndicators: false) {
+            VStack(alignment: .leading, spacing: 12) {
+                Text(plugin.name)
+                    .font(.system(size: 20, weight: .semibold))
+                    .foregroundStyle(colors.textPrimary)
+                    .accessibilityAddTraits(.isHeader)
+                Text("作者 \(authorName(plugin)) · v\(plugin.version)")
+                    .font(.system(size: 13))
+                    .foregroundStyle(colors.textSecondary)
+                Text(description)
+                    .font(.system(size: 15))
+                    .foregroundStyle(colors.textPrimary)
+                    .lineSpacing(4)
+                    .fixedSize(horizontal: false, vertical: true)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(18)
+            .linyuCard(colors)
+            .padding(.horizontal, PageLayout.horizontalInset)
+            .padding(.vertical, 16)
         }
-        .font(.system(size: size))
-        .foregroundStyle(colors.textSecondary)
     }
 
     private func emptyMessage(_ message: String) -> some View {
@@ -380,64 +488,93 @@ struct PluginManagementView: View {
             .frame(maxWidth: .infinity)
     }
 
-    @ViewBuilder private var panelContent: some View {
-        if let panel {
-            switch panel {
-            case let .details(plugin):
-                DialogScrim(onTapOutside: { self.panel = nil }) {
-                    AlertCard(title: plugin.name, titleAlign: .leading,
-                              contentSpacing: 10, actionSpacing: 0, cardPadding: 22) {
-                        VStack(alignment: .leading, spacing: 10) {
-                            attribution(plugin, size: 13)
-                            Text(plugin.description)
-                                .font(.system(size: 15))
-                                .foregroundStyle(colors.textPrimary)
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    } actions: {
-                        EmptyView()
-                    }
-                }
-            case let .delete(id):
-                ConfirmDialogView(
-                    title: "删除插件",
-                    message: "确定删除这个插件？",
-                    confirmTitle: "删除",
-                    destructive: true,
-                    onConfirm: {
-                        self.panel = nil
-                        onMessage(onUninstall(id) ? "已删除" : "删除失败，请重试")
-                    },
-                    onDismiss: { self.panel = nil }
-                )
+    @ViewBuilder private var deleteConfirmation: some View {
+        if let ids = pendingDeletion {
+            ConfirmDialogView(
+                title: "删除插件",
+                message: ids.count == 1 ? "确定删除这个插件？" : "确定删除所选插件？",
+                confirmTitle: "删除",
+                destructive: true,
+                compact: true,
+                onConfirm: { deletePlugins(ids) },
+                onDismiss: { pendingDeletion = nil }
+            )
+        }
+    }
+
+    private func tapInstalled(_ plugin: PluginManifest) {
+        if selecting {
+            toggleSelection(plugin.id)
+        } else {
+            navigate(to: .details(plugin, fromRepository: false))
+        }
+    }
+
+    private func selectByLongPress(_ id: String) {
+        guard !busy else { return }
+        if selection == nil { selection = [id] }
+    }
+
+    private func toggleSelection(_ id: String) {
+        guard !busy, var selection else { return }
+        if selection.contains(id) { selection.remove(id) } else { selection.insert(id) }
+        self.selection = selection
+    }
+
+    private func deletePlugins(_ ids: [String]) {
+        pendingDeletion = nil
+        let removed = ids.filter { onUninstall($0) }
+        selection?.subtract(removed)
+        if selection?.isEmpty == true { selection = nil }
+        if removed.isEmpty {
+            onMessage("删除失败，请重试")
+        } else if ids.count == 1 {
+            onMessage("已删除")
+        } else if removed.count == ids.count {
+            onMessage("已删除 \(removed.count) 个插件")
+        } else {
+            onMessage("已删除 \(removed.count) 个，\(ids.count - removed.count) 个失败")
+        }
+    }
+
+    private func navigate(to page: Page) {
+        pendingDeletion = nil
+        selection = nil
+        self.page = page
+    }
+
+    private func back() {
+        if pendingDeletion != nil {
+            pendingDeletion = nil
+        } else if selecting {
+            selection = nil
+        } else {
+            switch page {
+            case .management: onDismiss()
+            case .repository: navigate(to: .management)
+            case let .details(_, fromRepository):
+                navigate(to: fromRepository ? .repository : .management)
             }
         }
     }
 
-    private func back() {
-        if panel != nil {
-            panel = nil
-        } else if showingMarket {
-            showingMarket = false
-        } else {
-            onDismiss()
-        }
+    private func loadCatalog() async throws {
+        let entries = try await PluginRepository.fetchCatalog()
+        try Task.checkCancellation()
+        catalog = entries
+        catalogFailed = false
+        authorRefresh += 1
     }
 
-    private func checkCatalog(reportUpdates: Bool) {
+    private func checkCatalog(reportUpdates: Bool, reportRefresh: Bool = false) {
         guard !busy else { return }
         catalogFailed = false
         request = Task {
             defer { request = nil }
             do {
-                let entries = try await PluginRepository.fetchCatalog()
-                try Task.checkCancellation()
-                catalog = entries
-                creditRefresh += 1
+                try await loadCatalog()
                 if reportUpdates {
-                    let updateCount = installed.filter { plugin in
-                        entries.contains { PluginRepository.isUpdate(plugin, $0.manifest) }
-                    }.count
+                    let updateCount = installed.filter { availableUpdate(for: $0) != nil }.count
                     if installed.isEmpty {
                         onMessage("暂无已安装的插件")
                     } else if updateCount == 0 {
@@ -445,11 +582,58 @@ struct PluginManagementView: View {
                     } else {
                         onMessage("有 \(updateCount) 个插件可更新")
                     }
+                } else if reportRefresh {
+                    onMessage("插件仓库已刷新")
                 }
             } catch {
                 guard !Task.isCancelled else { return }
                 catalogFailed = true
                 if reportUpdates { onMessage("检查更新失败，请重试") }
+                if reportRefresh { onMessage("刷新失败，请重试") }
+            }
+        }
+    }
+
+    private func updateSelection() {
+        let plugins = selectedPlugins
+        guard !busy, !plugins.isEmpty else { return }
+        request = Task {
+            defer { request = nil }
+            do {
+                try await loadCatalog()
+            } catch {
+                guard !Task.isCancelled else { return }
+                catalogFailed = true
+            }
+
+            let updates = plugins.compactMap { availableUpdate(for: $0) }
+            guard !updates.isEmpty else {
+                onMessage(catalogFailed ? "检查更新失败，请重试" : "所选插件均为最新版本")
+                return
+            }
+
+            var failedIDs: Set<String> = []
+            for listing in updates {
+                do {
+                    let manifest = try await PluginRepository.download(listing)
+                    try Task.checkCancellation()
+                    if !onInstall(manifest) { failedIDs.insert(listing.id) }
+                } catch {
+                    guard !Task.isCancelled else { return }
+                    failedIDs.insert(listing.id)
+                }
+            }
+
+            let updated = updates.count - failedIDs.count
+            if updated == 0 {
+                onMessage("更新失败，请重试")
+            } else {
+                if selecting { selection = failedIDs.isEmpty ? nil : failedIDs }
+                if failedIDs.isEmpty {
+                    onMessage("已更新 \(updated) 个插件")
+                } else {
+                    onMessage("已更新 \(updated) 个，\(failedIDs.count) 个失败")
+                }
             }
         }
     }
@@ -471,7 +655,6 @@ struct PluginManagementView: View {
                 let manifest = try await load()
                 try Task.checkCancellation()
                 if onInstall(manifest) {
-                    showingMarket = false
                     onMessage(success)
                 } else {
                     onMessage("安装失败，请检查插件版本")

@@ -43,7 +43,7 @@ jobs:
             LinYu/HomeDeviceLayout.swift Tests/HomeDeviceLayoutRegression.swift \
             LinYu/BleCallbackGuard.swift Tests/BleCallbackRegression.swift \
             LinYu/BleReplyBuffer.swift Tests/BleReplyBufferRegression.swift \
-            LinYu/BleSettlementCleanup.swift Tests/BleSettlementRegression.swift \
+            LinYu/BleSettlementCleanup.swift LinYu/KlcxkjCrypto.swift Tests/BleSettlementRegression.swift \
             LinYu/NotificationPolicy.swift Tests/NotificationFeedbackRegression.swift \
             LinYu/UseCodeQuotaStore.swift \
             LinYu/DeviceControlPolicy.swift LinYu/CloudShower.swift Tests/DeviceControlRegression.swift \

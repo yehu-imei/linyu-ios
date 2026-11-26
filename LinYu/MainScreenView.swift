@@ -139,8 +139,8 @@ struct MainScreenView: View {
 
                     Color.clear.frame(height: 100)   // 给悬浮导航栏留位置
                 }
-                .padding(.horizontal, 20)
-                .padding(.top, 20)
+                .padding(.horizontal, PageLayout.horizontalInset)
+                .padding(.top, PageLayout.topInset)
             }
             // ⚠️ 裁剪：不加的话滚动时内容会画到状态栏/导航栏区域上，
             // 表现为「文字盖住状态栏」。Android 那边是 statusBarsPadding() 保证的，

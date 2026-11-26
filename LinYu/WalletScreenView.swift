@@ -121,7 +121,8 @@ struct WalletScreenView: View {
 
                     Color.clear.frame(height: 100)   // 给悬浮导航栏留位置
                 }
-                .padding(20)
+                .padding(.horizontal, PageLayout.horizontalInset)
+                .padding(.vertical, PageLayout.topInset)
             }
             .clipped()
             .refreshable {

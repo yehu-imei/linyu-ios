@@ -41,6 +41,7 @@ enum PageLayout {
     static let titleHeight: CGFloat = 40
     static let headerHeight: CGFloat = 60
     static let horizontalInset: CGFloat = 20
+    static let topInset: CGFloat = 20
 }
 
 // MARK: - 尾部优先省略
@@ -146,7 +147,7 @@ struct LinYuToast: View {
                 .clipShape(Circle())
                 .accessibilityHidden(true)
             Text(message)
-                .font(.system(size: 14, weight: .medium))
+                .font(.system(size: 15, weight: .medium))
                 .foregroundStyle(colors.textPrimary)
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)

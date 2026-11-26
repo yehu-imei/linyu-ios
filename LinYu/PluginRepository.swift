@@ -8,18 +8,20 @@ struct PluginManifest: Equatable, Identifiable, Sendable {
     let author: String
     let version: String
     let description: String
-    let credit: String?
-    let creditGithubID: Int64?
+    let details: String?
+    let authorGithubID: Int64?
+    let versionEpoch: Int
 
     init(id: String, name: String, author: String, version: String, description: String,
-         credit: String? = nil, creditGithubID: Int64? = nil) {
+         details: String? = nil, authorGithubID: Int64? = nil, versionEpoch: Int = 0) {
         self.id = id
         self.name = name
         self.author = author
         self.version = version
         self.description = description
-        self.credit = credit
-        self.creditGithubID = creditGithubID
+        self.details = details
+        self.authorGithubID = authorGithubID
+        self.versionEpoch = versionEpoch
     }
 }
 
@@ -117,7 +119,7 @@ enum PluginRepository {
     }
 
     static func fetchGithubLogins(_ manifests: [PluginManifest]) async -> [Int64: String] {
-        let ids = Set(manifests.compactMap(\.creditGithubID))
+        let ids = Set(manifests.compactMap(\.authorGithubID))
         return await withTaskGroup(of: (Int64, String?).self) { group in
             for id in ids {
                 group.addTask { (id, await githubLogin(id)) }
@@ -183,6 +185,7 @@ enum PluginRepository {
         guard installed.id == available.id,
               let current = versionParts(installed.version),
               let next = versionParts(available.version) else { return false }
+        if available.versionEpoch != installed.versionEpoch { return available.versionEpoch > installed.versionEpoch }
         return current.lexicographicallyPrecedes(next)
     }
 
@@ -239,8 +242,9 @@ enum PluginRepository {
             "formatVersion": 1,
             "capabilities": [capability]
         ]
-        if let credit = manifest.credit { json["credit"] = credit }
-        if let id = manifest.creditGithubID { json["creditGithubId"] = id }
+        if let details = manifest.details { json["details"] = details }
+        if let id = manifest.authorGithubID { json["authorGithubId"] = id }
+        if manifest.versionEpoch != 0 { json["versionEpoch"] = manifest.versionEpoch }
         guard (try? parseManifest(json)) == manifest else { return nil }
         return try? JSONSerialization.data(withJSONObject: json)
     }
@@ -288,15 +292,21 @@ enum PluginRepository {
             }
             return value
         }
-        let credit: String? = json["credit"] == nil ? nil : try required("credit", limit: 48)
-        let creditID = positiveInt(json["creditGithubId"])
-        guard json["creditGithubId"] == nil || (creditID != nil && credit != nil) else {
-            throw PluginError("插件贡献者无效")
-        }
+        let author = try required("author", limit: 48)
+        let authorID = positiveInt(json["authorGithubId"])
+        guard json["authorGithubId"] == nil || authorID != nil else { throw PluginError("插件作者无效") }
+        let details: String? = json["details"] == nil ? nil : try required("details", limit: 800)
+        // 将上一版已保存的内置清单调整为只展示作者，保留实际安装版本。
+        let legacyAuthor = author == "LinYu" ? (try? required("credit", limit: 48)) : nil
+        let legacyOwner = author == "LinYu" && (id == roomBindingID || id == InstalledPlugins.nearbyID)
+        let legacyID = legacyAuthor != nil ? positiveInt(json["creditGithubId"]) : (legacyOwner ? 178531070 : nil)
+        // 正式首版以 v1.0.0 起步，仍应更新此前已安装的预览版。
+        let epoch: Int64? = json["versionEpoch"] == nil ? 0 : positiveInt(json["versionEpoch"])
+        guard let epoch, (0...1).contains(epoch) else { throw PluginError("插件版本无效") }
         return try PluginManifest(id: id, name: required("name", limit: 48),
-                                  author: required("author", limit: 48), version: version,
-                                  description: required("description", limit: 300), credit: credit,
-                                  creditGithubID: creditID)
+                                  author: legacyAuthor ?? (legacyOwner ? "yehu-imei" : author), version: version,
+                                  description: required("description", limit: 300), details: details,
+                                  authorGithubID: authorID ?? legacyID, versionEpoch: Int(epoch))
     }
 
     private static func packagePath(for manifest: PluginManifest) -> String? {
@@ -397,8 +407,9 @@ enum RoomBindingPlugin {
     private static let roomKey = "boundRoom"
     private static let lock = NSRecursiveLock()
     private static let legacy = PluginManifest(id: PluginRepository.roomBindingID, name: "绑定寝室",
-                                               author: "LinYu", version: "1.0.0",
-                                               description: "为首页和桌面小组件筛选寝室设备")
+                                               author: "yehu-imei", version: "1.0.0",
+                                               description: "为首页和桌面小组件筛选寝室设备",
+                                               authorGithubID: 178531070)
 
     static var installed: PluginManifest? { installed(in: .standard) }
     static var effectiveRoom: String { effectiveRoom(in: .standard) }

@@ -33,14 +33,7 @@ struct ActiveOrder {
     ///
     /// ⚠️ 读的是持久化的**截止时间戳**，不是「每秒减一」的本地计数 ——
     /// 后者会因为计时器被系统挂起而越走越偏，切后台再回来就对不上了。
-    var autoDisConRemain: Int { Prefs.autoDisconRemain(snCode) }
-}
-
-enum ShowerChannel {
-    /// 云端 `tcpDevice/*`：服务端推给设备（要求 4G）
-    case cloud
-    /// 蓝牙 `bluetooth/*`：手机当网关
-    case ble
+    var autoDisConRemain: Int { channel.usesAppAutoClose ? Prefs.autoDisconRemain(snCode) : 0 }
 }
 
 /// 开阀失败的类型 —— 对照 Android 的 `ShowerErrorKind`。
@@ -186,7 +179,9 @@ final class ShowerFlow: ObservableObject {
         if Prefs.startedAt(order.snCode) <= 0 {
             Prefs.setStartedAt(order.snCode, Int64(Date().timeIntervalSince1970 * 1000))
         }
-        if order.autoDisConSec > 0, Prefs.autoDisconRemain(order.snCode) <= 0 {
+        if !order.channel.usesAppAutoClose {
+            Prefs.clearAutoDiscon(order.snCode)
+        } else if order.autoDisConSec > 0, Prefs.autoDisconRemain(order.snCode) <= 0 {
             Prefs.setAutoDisconRemain(order.snCode, seconds: order.autoDisConSec)
         }
         if ActiveOrderStore.find(order.snCode) != nil {
@@ -699,7 +694,7 @@ final class ShowerFlow: ObservableObject {
             preDeductMoney: displayPreDeduct(device, response: rateResp.data?.preDeductYuan),
             channel: .ble,
             project: project,
-            autoDisConSec: rateResp.data?.autoDisConTime ?? 0
+            autoDisConSec: 0
         )
         startTimer()
         AppLog.shared.i("✅ 蓝牙开阀成功 orderNo=\(rateResp.data?.orderNo ?? "")")
@@ -1195,12 +1190,19 @@ final class ShowerFlow: ObservableObject {
         // ⚠️ Android 由前台服务 `ShowerWatchService` 执行关阀，iOS 没那种常驻能力，
         // 只能在前台（或回到前台那一刻）发现到点并主动关阀——这是系统限制，
         // 不是实现偷懒。回到前台的对齐见 `reconcileOnResume()`。
-        guard order.autoDisConSec > 0, !didFireAutoClose, !controlGate.isBusy else { return }
-        if Prefs.autoDisconRemain(order.snCode) <= 0 {
-            didFireAutoClose = true
-            pendingAutoClose = true
-            AppLog.shared.i("到达自动关停时间（\(order.autoDisConSec)s），主动关阀")
-            Task { await close() }
+        guard order.channel.usesAppAutoClose, order.autoDisConSec > 0,
+              !didFireAutoClose, !controlGate.isBusy, Prefs.isAutoDisconDue(order.snCode) else { return }
+        Task {
+            await workScope.run(fallback: ()) {
+                guard let current = self.activeOrder, current.channel.usesAppAutoClose,
+                      current.snCode == order.snCode, current.startedAt == order.startedAt,
+                      !self.didFireAutoClose, !self.controlGate.isBusy,
+                      Prefs.isAutoDisconDue(current.snCode) else { return }
+                self.didFireAutoClose = true
+                self.pendingAutoClose = true
+                AppLog.shared.i("到达自动关停时间（\(current.autoDisConSec)s），主动关阀")
+                await self.close()
+            }
         }
     }
 

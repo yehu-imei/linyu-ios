@@ -335,12 +335,11 @@ struct MainTabView: View {
 
     @ViewBuilder private var toastLayer: some View {
         if let message = flow.toast, !message.isEmpty {
-            VStack {
-                LinYuToast(message: message).padding(.top, 14)
-                Spacer()
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            .allowsHitTesting(false)
+            LinYuToast(message: message)
+                .frame(height: PageLayout.titleHeight)
+                .padding(.top, PageLayout.topInset)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                .allowsHitTesting(false)
         }
     }
 

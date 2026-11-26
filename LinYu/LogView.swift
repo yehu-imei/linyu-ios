@@ -56,6 +56,7 @@ struct LogView: View {
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass").foregroundStyle(colors.textSecondary)
                 TextField("搜索日志内容", text: $searchText)
+                    .textFieldStyle(.plain)
                     .font(.system(size: 13)).foregroundStyle(colors.textPrimary)
                     .autocorrectionDisabled().textInputAutocapitalization(.never)
                 if !searchText.isEmpty {
@@ -64,7 +65,9 @@ struct LogView: View {
                     }.accessibilityLabel("清除搜索")
                 }
             }
-            .padding(10).background(colors.surfaceVariant).clipShape(RoundedRectangle(cornerRadius: 10))
+            .padding(.horizontal, 10)
+            .frame(maxWidth: .infinity, minHeight: 40, maxHeight: 40, alignment: .leading)
+            .background(colors.surfaceVariant).clipShape(RoundedRectangle(cornerRadius: 10))
             .padding(.horizontal, 14).padding(.vertical, 8)
             if visible.isEmpty {
                 Text(log.lines.isEmpty ? "暂无日志" : "暂无匹配日志")
