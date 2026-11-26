@@ -28,6 +28,7 @@ struct MainScreenView: View {
     @ObservedObject var flow: ShowerFlow
     @Binding var editing: Bool
     let roomPluginInstalled: Bool
+    let nearbyPluginInstalled: Bool
     let onResumeOrder: () -> Void
 
     /// snCode → 台账
@@ -88,9 +89,17 @@ struct MainScreenView: View {
         return matches.count == 1 ? matches[0] : nil
     }
 
+    private var unavailableSections: Set<HomeDeviceSection> {
+        nearbyPluginInstalled ? [] : [.nearby]
+    }
+
+    private var editableSections: [HomeDeviceSection] {
+        homeLayout.sections.filter { !unavailableSections.contains($0) }
+    }
+
     private var displayedSections: [HomeDeviceSection] {
-        if editing { return homeLayout.sections }
-        return homeLayout.sections.filter { section in
+        if editing { return editableSections }
+        return editableSections.filter { section in
             !homeLayout.hidden.contains(section) && (section != .lastUsed ||
                 (flow.restoredOrders.isEmpty && hasEligibleLastDevice))
         }
@@ -250,7 +259,7 @@ struct MainScreenView: View {
                         .foregroundStyle(colors.textPrimary)
                 }
                 .disabled(refreshing)
-                .accessibilityLabel("刷新附近设备")
+                .accessibilityLabel(nearbyPluginInstalled ? "刷新附近设备" : "刷新")
             }
         }
         .frame(height: PageLayout.headerHeight, alignment: .top)
@@ -278,7 +287,7 @@ struct MainScreenView: View {
     }
 
     private func homeSectionHeader(_ section: HomeDeviceSection, isVisible: Bool) -> some View {
-        let order = homeLayout.sections
+        let order = editableSections
         let index = order.firstIndex(of: section) ?? 0
         return HStack(spacing: 0) {
             Text(isVisible ? section.title : "\(section.title)（已隐藏）")
@@ -288,7 +297,7 @@ struct MainScreenView: View {
             Spacer(minLength: 8)
             if editing {
                 moveButtons(index: index, count: order.count) { offset in
-                    updateHomeLayout { $0.moveSection(section, by: offset) }
+                    updateHomeLayout { $0.moveSection(section, by: offset, excluding: unavailableSections) }
                 }
                 homeEditButton(isVisible ? "eye.slash" : "eye",
                                title: isVisible ? "隐藏\(section.title)" : "显示\(section.title)",
@@ -806,7 +815,7 @@ struct MainScreenView: View {
     /// 「上次使用设备」→ 开始。
     ///
     /// ⚠️ 这里**不需要扫描到设备**：普通 4G 表走云端，服务端推给设备就行。
-    /// 只有蓝牙表（服务端标记 or 用户确认过）才必须有连接对象——那种情况才提示去附近设备里选。
+    /// 蓝牙表需要先扫描到设备，才能获得连接对象。
     private func startLastDevice() async {
         let sn = Prefs.lastDeviceSnCode
         guard !sn.isEmpty else {
@@ -843,7 +852,7 @@ struct MainScreenView: View {
         }
         if info.needsBluetoothControl || Prefs.isBleDevice(sn) {
             guard let p = scanner.peripheral(forSn: sn), let central = scanner.manager else {
-                flow.toast = "这台是蓝牙表，请从「附近设备」中选它（需要先扫描到）"
+                flow.toast = "未找到蓝牙设备，请靠近后刷新"
                 return
             }
             await flow.open(device: info, peripheral: p, central: central)

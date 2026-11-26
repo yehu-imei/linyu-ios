@@ -1,0 +1,77 @@
+{
+  "formatVersion": 1,
+  "plugins": [
+    {
+      "id": "nearby-devices",
+      "name": "附近设备",
+      "author": "LinYu",
+      "version": "1.0.0",
+      "description": "在首页和桌面小组件显示附近设备",
+      "formatVersion": 1,
+      "capabilities": [
+        "device.nearby"
+      ],
+      "path": "packages/nearby-devices-1.0.0.zip",
+      "sha256": "bf7ca86830ab799936f331e96e3c9785c357f2360f107ef01877b258b8a7e1b8"
+    },
+    {
+      "id": "consumption-trend",
+      "name": "消费趋势",
+      "author": "LinYu",
+      "version": "1.0.0",
+      "description": "在账单页显示近七天和本月的消费趋势",
+      "formatVersion": 1,
+      "capabilities": [
+        "bill.consumption-trend"
+      ],
+      "credit": "XiaoLoad",
+      "creditGithubId": 63766325,
+      "path": "packages/consumption-trend-1.0.0.zip",
+      "sha256": "0dd11ca6458c30ce8d057077eb224467f4122c95da39120f060d375c5e6d581c"
+    },
+    {
+      "id": "keep-screen-on",
+      "name": "屏幕常亮",
+      "author": "LinYu",
+      "version": "1.0.0",
+      "description": "使用设备时保持屏幕亮起",
+      "formatVersion": 1,
+      "capabilities": [
+        "usage.keep-screen-on"
+      ],
+      "credit": "MengQingSSSS",
+      "creditGithubId": 169689978,
+      "path": "packages/keep-screen-on-1.0.0.zip",
+      "sha256": "2ac0daf9d9769e1b3dea1cc3d53f1412a509cefe07c0354dc6a414892dae2483"
+    },
+    {
+      "id": "background",
+      "name": "背景装扮",
+      "author": "LinYu",
+      "version": "1.0.0",
+      "description": "自定义主页和使用页的背景",
+      "formatVersion": 1,
+      "capabilities": [
+        "appearance.background"
+      ],
+      "credit": "王鹏辉",
+      "path": "packages/background-1.0.0.zip",
+      "sha256": "d2b77338312942134379f61130b9c8237a25ce963a47faf2fbfa7c395ed52edf"
+    },
+    {
+      "id": "runtime-log",
+      "name": "运行日志",
+      "author": "LinYu",
+      "version": "1.0.0",
+      "description": "查看和导出应用运行日志",
+      "formatVersion": 1,
+      "capabilities": [
+        "diagnostics.runtime-log"
+      ],
+      "credit": "Cainite07",
+      "creditGithubId": 187083445,
+      "path": "packages/runtime-log-1.0.0.zip",
+      "sha256": "299612d680593cd6b65ffef38522c2093d396e1000b2b24076d3fa3722aaa05c"
+    }
+  ]
+}

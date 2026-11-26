@@ -26,7 +26,7 @@ enum UserCardType: String, CaseIterable {
         case .update: return "软件更新"
         case .about: return "关于项目"
         case .log: return "运行日志"
-        case .featureManagement: return "功能管理"
+        case .featureManagement: return "开关管理"
         }
     }
 }
@@ -46,29 +46,33 @@ enum UserCardLayout {
     }
 
     static let profileDefaults: [UserCardType] = [.account, .useCode, .boundRoom]
-    static let settingsDefaults: [UserCardType] = [.featureManagement, .about, .update]
-    static let featureDefaults: [UserCardType] = [.notify, .trend, .keepScreenOn, .background, .log]
+    static let settingsDefaults: [UserCardType] = [.featureManagement, .background, .log, .about, .update]
+    static let featureDefaults: [UserCardType] = [.notify, .trend, .keepScreenOn]
 
-    /// 功能管理布局未保存时，保留旧设置卡片的相对顺序并归入功能管理。
-    /// 空字符串表示用户已把功能全部移出，恢复时继续使用空分组。
+    /// 保留已有分页和顺序，旧分组中的背景与日志移到设置。
+    /// 空字符串表示用户已把开关全部移出，恢复时继续使用空分组。
     static func restorePages(profileSaved: String, settingsSaved: String, featuresSaved: String? = nil) -> Pages {
         let group = UserCardType.featureManagement
         var profile = unique(parse(profileSaved).filter { $0 != group })
         let previousSettings = parse(settingsSaved).filter { !profile.contains($0) }
-        let features: [UserCardType]
-        if let featuresSaved {
-            features = unique(parse(featuresSaved).filter { featureDefaults.contains($0) && !profile.contains($0) })
-        } else {
-            var previousFeatures = previousSettings.filter { featureDefaults.contains($0) }
-            if let background = previousFeatures.firstIndex(of: .background), !previousFeatures.contains(.keepScreenOn) {
-                previousFeatures.insert(.keepScreenOn, at: background)
-            }
-            features = unique(previousFeatures + featureDefaults).filter { !profile.contains($0) }
-        }
+        let previousFeatures = featuresSaved.map(parse) ?? previousSettings
+        let switches = previousFeatures.filter(featureDefaults.contains)
+        let features = unique(switches + (featuresSaved == nil ? featureDefaults : []))
+            .filter { !profile.contains($0) }
         var settings = unique(previousSettings.compactMap { card in
             if !features.contains(card) { return card }
             return featuresSaved == nil ? group : nil
         })
+        let removedFromGroup = unique(previousFeatures.filter {
+            ($0 == .background || $0 == .log) && !profile.contains($0) && !settings.contains($0)
+        })
+        if !removedFromGroup.isEmpty {
+            if let index = settings.firstIndex(of: group) {
+                settings.insert(contentsOf: removedFromGroup, at: index + 1)
+            } else {
+                settings += [group] + removedFromGroup
+            }
+        }
         var assigned = Set(profile + settings + features)
         profile += profileDefaults.filter { assigned.insert($0).inserted }
         settings += settingsDefaults.filter { assigned.insert($0).inserted }

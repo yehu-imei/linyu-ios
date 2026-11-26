@@ -35,6 +35,7 @@ struct WidgetSnapshot: Codable, Equatable {
     var token = UUID().uuidString
     var date = Date()
     var nearbyDate: Date?
+    var nearbyDisabled: Bool?
     var lastDevice = ""
     var devices: [WidgetDevice] = []
     var nearbyIDs: [String] = []
@@ -45,6 +46,11 @@ struct WidgetSnapshot: Codable, Equatable {
     var busy = false
 
     var emptyTitle: String { message == nil ? "未登录" : "等待同步" }
+    var showsNearby: Bool { nearbyDisabled != true }
+
+    func visibleTab(_ tab: Int) -> Int {
+        tab == 1 && !showsNearby ? 0 : tab
+    }
 
     func selected(_ id: String) -> WidgetDevice? {
         let chosen = id.isEmpty ? lastDevice : id

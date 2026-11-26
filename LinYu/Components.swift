@@ -131,35 +131,33 @@ struct DeviceGlyph: View {
 
 // MARK: - Toast
 
-/// 轻提示。Android 用自己的 `LinYuToast`（圆角深色胶囊 + 淡入淡出），
-/// 这里用同样的视觉，挂在窗口顶层。
+/// 与 Android 一致，使用当前主题的单行提示卡片。
 struct LinYuToast: View {
+    @Environment(\.appColors) private var colors
     let message: String
-    let isDark: Bool
 
     var body: some View {
-        HStack(spacing: 12) {
-            // 和 Android 一样用 app_logo（`R.drawable.app_logo`，32dp）
+        let shape = RoundedRectangle(cornerRadius: 22, style: .continuous)
+        HStack(spacing: 8) {
             Image("LoginLogo")
                 .resizable()
                 .scaledToFit()
-                .frame(width: 32, height: 32)
-                .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-            // ⚠️ 必须单行：多行会把气泡撑成方块，弹出位置也跟着跳
+                .frame(width: 23, height: 23)
+                .clipShape(Circle())
+                .accessibilityHidden(true)
             Text(message)
                 .font(.system(size: 14, weight: .medium))
-                .foregroundColor(.white)
+                .foregroundStyle(colors.textPrimary)
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
-                .truncationMode(.tail)
+                .truncationMode(.head)
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 16)
-        .background(Color(hex: 0x1F2937))
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .shadow(color: .black.opacity(0.25), radius: 8, y: 2)
+        .padding(.horizontal, 13)
+        .padding(.vertical, 9)
+        .background(colors.solidSurface, in: shape)
+        .overlay(shape.strokeBorder(colors.border, lineWidth: 0.8))
+        .shadow(color: .black.opacity(0.16), radius: 4, y: 2)
         .padding(.horizontal, 24)
-        // 宽度上限：超长文案（「已绑定寝室：龙川北苑-3号楼南-3层-320」）要能截断
         .frame(maxWidth: 420, alignment: .center)
     }
 }

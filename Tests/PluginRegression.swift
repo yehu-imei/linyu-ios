@@ -113,5 +113,23 @@ struct PluginRegression {
                   RoomBindingPlugin.effectiveRoom(in: defaults).isEmpty &&
                   defaults.string(forKey: "lastDeviceName") == "之前使用过的设备",
                   "uninstall clears room settings while preserving device history")
+
+        let bundledFile = URL(fileURLWithPath: "LinYu/linyu_bundled_plugins.json")
+        let bundled = try PluginRepository.parseCatalog(Data(contentsOf: bundledFile))
+        try check(Set(bundled.map(\.id)) == Set([
+            InstalledPlugins.nearbyID, InstalledPlugins.consumptionTrendID, InstalledPlugins.keepScreenOnID,
+            InstalledPlugins.backgroundID, InstalledPlugins.runtimeLogID
+        ]), "ships all five default plugins and keeps room binding optional")
+        let trend = bundled.first { $0.id == InstalledPlugins.consumptionTrendID }!.manifest
+        try check(trend.credit == "XiaoLoad" && trend.creditGithubID == 63766325 && trend.author == "LinYu",
+                  "keeps suggestion attribution separate from authorship")
+        try check(!InstalledPlugins.install(trend, defaults: defaults, bundled: bundled),
+                  "the bundled plugin is already installed")
+        try check(InstalledPlugins.uninstall(trend.id, defaults: defaults, bundled: bundled) &&
+                  !InstalledPlugins.uninstall(trend.id, defaults: defaults, bundled: bundled),
+                  "uninstall remains disabled despite the bundled catalog")
+        try check(InstalledPlugins.install(trend, defaults: defaults, bundled: bundled) &&
+                  !InstalledPlugins.install(trend, defaults: defaults, bundled: bundled),
+                  "the default plugin can be reinstalled offline")
     }
 }

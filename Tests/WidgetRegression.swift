@@ -53,6 +53,12 @@ import Foundation
         check(try JSONDecoder().decode(WidgetSnapshot.self, from: encoded) == snapshot, "快照序列化完整保留设备与订单")
         let legacy = try JSONDecoder().decode(WidgetSnapshot.self, from: encoded)
         check(legacy.devices.allSatisfy { $0.rawName == nil }, "已安装旧版本的小组件快照允许缺少原始设备名")
+        check(legacy.showsNearby && legacy.visibleTab(1) == 1, "旧快照保留附近设备入口")
+        var disabledNearby = legacy
+        disabledNearby.nearbyDisabled = true
+        check(disabledNearby.visibleTab(1) == 0 && disabledNearby.visibleTab(2) == 2 &&
+              disabledNearby.controlIdentity == legacy.controlIdentity,
+              "卸载附近设备后切回设备控制并保留账单及原水控身份")
         var namedSnapshot = snapshot
         namedSnapshot.devices[0].rawName = "龙川北苑-3号楼-3层-320"
         let named = try JSONDecoder().decode(WidgetSnapshot.self, from: JSONEncoder().encode(namedSnapshot))

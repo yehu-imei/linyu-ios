@@ -8,7 +8,6 @@ import Combine
 /// - Toast 挂在这一层，因为开阀/结算的提示可能发生在任意 Tab
 struct MainTabView: View {
     @Environment(\.appColors) private var colors
-    @Environment(\.isDarkMode) private var isDark
 
     @State private var tab = 0
     /// 会话状态在容器里持有：首页、用水页、我的页共用同一条 BLE 连接
@@ -32,7 +31,8 @@ struct MainTabView: View {
     @State private var settingsVisible = false
     @State private var editingCards = false
     @State private var showPluginManagement = false
-    @State private var roomPlugin = RoomBindingPlugin.installed
+    @State private var installedPlugins = InstalledPlugins.all
+    @AppStorage("installedPluginOrder") private var installedPluginOrder = ""
     @AppStorage("boundRoom") private var boundRoom = ""
     // 与水控状态同一生命周期，不能在视图重建/组件唤起时复位。
     private var showerMinimized: Bool {
@@ -44,9 +44,27 @@ struct MainTabView: View {
     /// 从首页改完设置（寝室筛选等）要让首页刷新，用一个计数器触发
     @State private var refreshToken = 0
 
+    private func hasPlugin(_ id: String) -> Bool {
+        installedPlugins.contains { $0.id == id }
+    }
+
+    private var backgroundPluginInstalled: Bool {
+        hasPlugin(InstalledPlugins.backgroundID)
+    }
+
+    private var orderedPlugins: [PluginManifest] {
+        var remaining = installedPlugins
+        let saved = installedPluginOrder.split(separator: ",").compactMap { id -> PluginManifest? in
+            guard let index = remaining.firstIndex(where: { $0.id == String(id) }) else { return nil }
+            return remaining.remove(at: index)
+        }
+        return saved + remaining
+    }
+
     var body: some View {
         ZStack(alignment: .bottom) {
-            AppBackground(scope: flow.activeOrder != nil && !showerMinimized ? .shower : .home)
+            AppBackground(scope: flow.activeOrder != nil && !showerMinimized ? .shower : .home,
+                          backgroundPluginInstalled: backgroundPluginInstalled)
 
             if let order = flow.activeOrder, !showerMinimized {
                 ShowerScreenView(
@@ -57,6 +75,8 @@ struct MainTabView: View {
                     elapsedSec: order.elapsedSeconds,
                     autoDisConSec: order.autoDisConRemain,
                     isStopping: flow.isStopping,
+                    keepScreenOnPluginInstalled: hasPlugin(InstalledPlugins.keepScreenOnID),
+                    backgroundPluginInstalled: backgroundPluginInstalled,
                     onStop: { Task { await flow.close() } },
                     onMinimize: minimizeShower
                 )
@@ -74,14 +94,22 @@ struct MainTabView: View {
                         switch tab {
                         case 0:
                             MainScreenView(scanner: scanner, store: store, flow: flow,
-                                            editing: $editingCards, roomPluginInstalled: roomPlugin != nil,
-                                           onResumeOrder: { showerMinimized = false })
+                                            editing: $editingCards,
+                                            roomPluginInstalled: hasPlugin(InstalledPlugins.roomBindingID),
+                                            nearbyPluginInstalled: hasPlugin(InstalledPlugins.nearbyID),
+                                            onResumeOrder: { showerMinimized = false })
                                 .id(refreshToken)
                         case 1:
-                            WalletScreenView(store: store, flow: flow, deduct: deduct)
+                            WalletScreenView(store: store, flow: flow, deduct: deduct,
+                                             trendPluginInstalled: hasPlugin(InstalledPlugins.consumptionTrendID))
                         default:
                             UserScreenView(flow: flow, scanner: scanner, settingsVisible: $settingsVisible,
-                                           editMode: $editingCards, roomPluginInstalled: roomPlugin != nil,
+                                           editMode: $editingCards,
+                                           roomPluginInstalled: hasPlugin(InstalledPlugins.roomBindingID),
+                                           trendPluginInstalled: hasPlugin(InstalledPlugins.consumptionTrendID),
+                                           keepScreenOnPluginInstalled: hasPlugin(InstalledPlugins.keepScreenOnID),
+                                           backgroundPluginInstalled: backgroundPluginInstalled,
+                                           runtimeLogPluginInstalled: hasPlugin(InstalledPlugins.runtimeLogID),
                                            onOpenPluginManagement: { showPluginManagement = true })
                         }
                     }
@@ -102,7 +130,7 @@ struct MainTabView: View {
                             slideForward = newTab > tab
                             withAnimation(Self.pageAnimation) { tab = newTab }
                         }
-                    ), colors: backgrounds.colors(colors))
+                    ), colors: backgrounds.colors(colors, backgroundPluginInstalled: backgroundPluginInstalled))
                         .padding(.bottom, 22)
                         .padding(.horizontal, 24)
                         .transition(.identity)
@@ -118,17 +146,19 @@ struct MainTabView: View {
         .overlay {
             if showPluginManagement {
                 PluginManagementView(
-                    installed: roomPlugin,
+                    installed: orderedPlugins,
+                    backgroundPluginInstalled: backgroundPluginInstalled,
                     onInstall: { plugin in
-                        guard RoomBindingPlugin.install(plugin) else { return false }
-                        syncRoomPlugin()
+                        guard InstalledPlugins.install(plugin) else { return false }
+                        syncPlugins()
                         return true
                     },
-                    onUninstall: {
-                        guard RoomBindingPlugin.uninstall() else { return false }
-                        syncRoomPlugin()
+                    onUninstall: { id in
+                        guard InstalledPlugins.uninstall(id) else { return false }
+                        syncPlugins()
                         return true
                     },
+                    onMove: movePlugin,
                     onDismiss: { showPluginManagement = false },
                     onMessage: { flow.toast = $0 }
                 )
@@ -165,7 +195,7 @@ struct MainTabView: View {
         .environmentObject(store)
         .overlay { toastLayer }
         .environmentObject(userPresentation)
-        .environment(\.appColors, backgrounds.colors(colors))
+        .environment(\.appColors, backgrounds.colors(colors, backgroundPluginInstalled: backgroundPluginInstalled))
         .task {
             if Prefs.notifyEnabled { _ = await AppNotifications.shared.requestPermission() }
             flow.refreshInUseNotifications()
@@ -290,19 +320,26 @@ struct MainTabView: View {
         }
     }
 
-    private func syncRoomPlugin() {
-        roomPlugin = RoomBindingPlugin.installed
+    private func syncPlugins() {
+        installedPlugins = InstalledPlugins.all
         widgets.sync(store: store, flow: flow, scanner: scanner, force: true)
+    }
+
+    private func movePlugin(_ id: String, to targetID: String) {
+        var order = orderedPlugins.map(\.id)
+        guard let from = order.firstIndex(of: id), let to = order.firstIndex(of: targetID), from != to else { return }
+        order.remove(at: from)
+        order.insert(id, at: to)
+        installedPluginOrder = order.joined(separator: ",")
     }
 
     @ViewBuilder private var toastLayer: some View {
         if let message = flow.toast, !message.isEmpty {
             VStack {
-                LinYuToast(message: message, isDark: isDark).padding(.top, 60)
+                LinYuToast(message: message).padding(.top, 14)
                 Spacer()
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            .ignoresSafeArea(.container, edges: .top)
             .allowsHitTesting(false)
         }
     }
@@ -331,7 +368,8 @@ struct MainTabView: View {
         userPresentation.dialog = nil
         showerMinimized = true
         tab = action == .bills || action == .billDetail ? 1 : 0
-        if action == .nearby || action == .device, !scanner.isScanning { scanner.start() }
+        let opensNearby = action == .nearby && hasPlugin(InstalledPlugins.nearbyID)
+        if opensNearby || action == .device, !scanner.isScanning { scanner.start() }
         return true
     }
 

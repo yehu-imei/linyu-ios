@@ -89,6 +89,7 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             ENABLE_BITCODE=NO
           test -s build/LinYu.xcarchive/Products/Applications/LinYu.app/APP_CHANGELOG.md
+          test -s build/LinYu.xcarchive/Products/Applications/LinYu.app/linyu_bundled_plugins.json
 
       - name: 组件离线布局截图
         run: |

@@ -41,8 +41,8 @@ final class BackgroundStore: ObservableObject {
     /// ⚠️ 两个细节别改：
     /// - 只认 **home** 作用域（使用页的背景色不影响全局强调色）
     /// - 提取出来是什么色就**原样**用，不再二次调饱和度/亮度（那是另一套颜色了）
-    func colors(_ base: AppColorSet) -> AppColorSet {
-        guard let color = accents[.home] else { return base }
+    func colors(_ base: AppColorSet, backgroundPluginInstalled: Bool) -> AppColorSet {
+        guard backgroundPluginInstalled, let color = accents[.home] else { return base }
         var result = base
         result.accent = Color(uiColor: color)
         return result
@@ -157,11 +157,12 @@ struct AppBackground: View {
     @Environment(\.appColors) private var colors
     @ObservedObject private var backgrounds = BackgroundStore.shared
     var scope: BackgroundScope = .home
+    let backgroundPluginInstalled: Bool
     var body: some View {
         GeometryReader { geometry in
             ZStack {
                 colors.background
-                if let image = backgrounds.image(scope) {
+                if backgroundPluginInstalled, let image = backgrounds.image(scope) {
                     let settings = backgrounds.settings(scope)
                     Image(uiImage: image).resizable().scaledToFill()
                         .frame(width: geometry.size.width, height: geometry.size.height)

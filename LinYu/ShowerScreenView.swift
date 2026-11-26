@@ -13,15 +13,21 @@ struct ShowerScreenView: View {
     let elapsedSec: Int
     let autoDisConSec: Int
     let isStopping: Bool
+    let keepScreenOnPluginInstalled: Bool
+    let backgroundPluginInstalled: Bool
     let onStop: () -> Void
     let onMinimize: () -> Void
 
     @Environment(\.appColors) private var colors
     @Environment(\.isDarkMode) private var isDark
     @Environment(\.scenePhase) private var scenePhase
-    @AppStorage("keepScreenOnDuringUse") private var keepScreenOn = true
+    @AppStorage("keepScreenOnDuringUse") private var keepScreenOn = false
     @State private var previousIdleTimerSetting: Bool?
     @ObservedObject private var backgrounds = BackgroundStore.shared
+
+    private var hasCustomBackground: Bool {
+        backgroundPluginInstalled && backgrounds.image(.shower) != nil
+    }
 
     private var timeText: String {
         let m = elapsedSec / 60
@@ -47,14 +53,14 @@ struct ShowerScreenView: View {
             // 对照 Android `ShowerScreen`：使用页套了自定义背景就**不画自身渐变**，
             // 让底层（容器那层 AppBackground，scope = shower）的图片透出来。
             // 否则自定义背景永远被这块渐变盖住，用户看到的还是默认蓝/深蓝。
-            if backgrounds.image(.shower) == nil {
+            if !hasCustomBackground {
                 backgroundGradient.ignoresSafeArea()
             }
 
             ScrollView {
                 VStack(spacing: 0) {
                     // 72pt 图标（和 Android 的 `DeviceGlyph(emoji, 72.sp, 72.dp)` 同尺寸）
-                    if backgrounds.image(.shower) == nil {
+                    if !hasCustomBackground {
                         PlainGlyph(emoji: emoji, size: 72, tint: .white)
                             .padding(.bottom, 8)
                     }
@@ -100,10 +106,12 @@ struct ShowerScreenView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                     .padding(.top, 24)
 
-                    Text(keepScreenOn ? "屏幕常亮：开" : "屏幕常亮：关")
-                        .font(.system(size: 12))
-                        .foregroundStyle(colors.textSecondary)
-                        .padding(.top, 8)
+                    if keepScreenOnPluginInstalled {
+                        Text(keepScreenOn ? "屏幕常亮：开" : "屏幕常亮：关")
+                            .font(.system(size: 12))
+                            .foregroundStyle(colors.textSecondary)
+                            .padding(.top, 8)
+                    }
 
                     // 自动关停倒计时
                     if autoDisConSec > 0 {
@@ -176,11 +184,12 @@ struct ShowerScreenView: View {
         .onAppear { updateScreenAwake() }
         .onChange(of: scenePhase) { _ in updateScreenAwake() }
         .onChange(of: keepScreenOn) { _ in updateScreenAwake() }
+        .onChange(of: keepScreenOnPluginInstalled) { _ in updateScreenAwake() }
         .onDisappear { restoreIdleTimer() }
     }
 
     private func updateScreenAwake() {
-        guard keepScreenOn, scenePhase == .active else {
+        guard keepScreenOnPluginInstalled, keepScreenOn, scenePhase == .active else {
             restoreIdleTimer()
             return
         }

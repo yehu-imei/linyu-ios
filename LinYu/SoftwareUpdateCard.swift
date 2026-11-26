@@ -131,17 +131,22 @@ struct SoftwareUpdateCard: View {
                     .foregroundStyle(status.1).padding(.top, 8)
                 if !releases.notes.isEmpty {
                     Divider().overlay(colors.border).padding(.top, 14).padding(.bottom, 10)
-                    Text("更新日志").font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(colors.textPrimary).padding(.bottom, 2)
+                    HStack {
+                        Text("更新日志").font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(colors.textPrimary)
+                        Spacer()
+                        if releases.notes.count > 3 {
+                            Button { showAll.toggle() } label: {
+                                Text(showAll ? "收起" : "展开全部")
+                                    .font(.system(size: 12)).foregroundStyle(colors.accent)
+                                    .frame(minHeight: 32)
+                                    .contentShape(Rectangle())
+                            }.buttonStyle(InstantButtonStyle())
+                        }
+                    }
+                    .padding(.bottom, 2)
                     ForEach(showAll ? releases.notes : Array(releases.notes.prefix(3))) { release in
                         releaseRow(release)
-                    }
-                    if releases.notes.count > 3 {
-                        Button { showAll.toggle() } label: {
-                            Text(showAll ? "收起" : "展开全部")
-                                .font(.system(size: 12)).foregroundStyle(colors.accent)
-                                .frame(maxWidth: .infinity).frame(minHeight: 40)
-                        }.buttonStyle(InstantButtonStyle())
                     }
                 }
                 Button { Task { await releases.check(force: true) } } label: {

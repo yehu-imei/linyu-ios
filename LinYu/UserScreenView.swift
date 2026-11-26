@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// 「我的账号」与「设置」共用主界面的编辑状态。功能管理支持组内排序和移入移出。
+/// 「我的账号」与「设置」共用主界面的编辑状态。开关管理支持组内排序和移入移出。
 struct UserScreenView: View {
     @EnvironmentObject private var session: Session
     @Environment(\.appColors) private var colors
@@ -15,6 +15,10 @@ struct UserScreenView: View {
     @Binding var settingsVisible: Bool
     @Binding var editMode: Bool
     let roomPluginInstalled: Bool
+    let trendPluginInstalled: Bool
+    let keepScreenOnPluginInstalled: Bool
+    let backgroundPluginInstalled: Bool
+    let runtimeLogPluginInstalled: Bool
     let onOpenPluginManagement: () -> Void
 
     @AppStorage("linyu.darkMode") private var isDark = false
@@ -29,12 +33,18 @@ struct UserScreenView: View {
     @State private var settingsHidden: Set<String> = UserCardLayout.loadHidden("userSettingsHiddenCards")
 
     init(flow: ShowerFlow, scanner: BLEScanner, settingsVisible: Binding<Bool>, editMode: Binding<Bool>,
-         roomPluginInstalled: Bool, onOpenPluginManagement: @escaping () -> Void) {
+         roomPluginInstalled: Bool, trendPluginInstalled: Bool, keepScreenOnPluginInstalled: Bool,
+         backgroundPluginInstalled: Bool, runtimeLogPluginInstalled: Bool,
+         onOpenPluginManagement: @escaping () -> Void) {
         self.flow = flow
         self.scanner = scanner
         _settingsVisible = settingsVisible
         _editMode = editMode
         self.roomPluginInstalled = roomPluginInstalled
+        self.trendPluginInstalled = trendPluginInstalled
+        self.keepScreenOnPluginInstalled = keepScreenOnPluginInstalled
+        self.backgroundPluginInstalled = backgroundPluginInstalled
+        self.runtimeLogPluginInstalled = runtimeLogPluginInstalled
         self.onOpenPluginManagement = onOpenPluginManagement
         _pages = State(initialValue: UserCardLayout.loadPages())
     }
@@ -237,8 +247,16 @@ struct UserScreenView: View {
     // MARK: - 卡片列表
 
     private func visibleCards(in order: [UserCardType], hidden: Set<String>) -> [UserCardType] {
-        order.filter {
-            (roomPluginInstalled || $0 != .boundRoom) && (editMode || !hidden.contains($0.rawValue))
+        order.filter { card in
+            guard editMode || !hidden.contains(card.rawValue) else { return false }
+            switch card {
+            case .boundRoom: return roomPluginInstalled
+            case .trend: return trendPluginInstalled
+            case .keepScreenOn: return keepScreenOnPluginInstalled
+            case .background: return backgroundPluginInstalled
+            case .log: return runtimeLogPluginInstalled
+            default: return true
+            }
         }
     }
 
@@ -274,7 +292,7 @@ struct UserScreenView: View {
                             }
                         }
                         if let onMoveIntoFeatures, UserCardLayout.featureDefaults.contains(type) {
-                            editIcon("plus", "移入功能管理", colors.accent) {
+                            editIcon("plus", "移入开关管理", colors.accent) {
                                 onMoveIntoFeatures(type)
                             }
                         }
@@ -321,7 +339,7 @@ struct UserScreenView: View {
                 featuresExpanded.toggle()
             } label: {
                 HStack {
-                    Text("功能管理")
+                    Text(UserCardType.featureManagement.title)
                         .font(.system(size: 16, weight: .semibold))
                         .foregroundStyle(colors.textPrimary)
                     Spacer()
@@ -347,8 +365,8 @@ struct UserScreenView: View {
                 }
                 cardList(order: $pages.features, hidden: $settingsHidden,
                          hiddenKey: "userSettingsHiddenCards", moveIcon: "arrow.right",
-                         moveHint: "移出功能管理", onMove: { moveCard($0, to: .settings) },
-                         spacing: 0) { type in
+                         moveHint: "移出开关管理", onMove: { moveCard($0, to: .settings) },
+                         spacing: 8) { type in
                     card(type)
                 }
             }

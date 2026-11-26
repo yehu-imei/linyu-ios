@@ -32,6 +32,9 @@ enum HomeDeviceLayoutRegression {
         layout.moveSection(.lastUsed, by: -1)
         check(layout.hidden == [.nearby] && layout.sections == [.lastUsed, .nearby, .favorites],
               "隐藏与排序独立、首项不能越界上移")
+        layout.moveSection(.favorites, by: -1, excluding: [.nearby])
+        check(layout.sections == [.favorites, .nearby, .lastUsed] && layout.hidden == [.nearby],
+              "附近设备插件卸载后，可见区块能重排且保留插件位置")
 
         let suite = "LinYu.HomeDeviceLayoutRegression.\(UUID().uuidString)"
         guard let defaults = UserDefaults(suiteName: suite) else {

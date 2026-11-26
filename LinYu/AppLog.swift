@@ -68,6 +68,7 @@ final class AppLog: ObservableObject {
     func e(_ message: String, _ detail: String? = nil) { append(.error, message, detail) }
 
     private func append(_ level: LogLine.Level, _ message: String, _ detail: String?) {
+        guard InstalledPlugins.isInstalled(InstalledPlugins.runtimeLogID) else { return }
         let line = LogLine(
             time: Date(),
             level: level,

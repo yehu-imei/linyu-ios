@@ -8,12 +8,33 @@ struct PluginManifest: Equatable, Identifiable, Sendable {
     let author: String
     let version: String
     let description: String
+    let credit: String?
+    let creditGithubID: Int64?
+
+    init(id: String, name: String, author: String, version: String, description: String,
+         credit: String? = nil, creditGithubID: Int64? = nil) {
+        self.id = id
+        self.name = name
+        self.author = author
+        self.version = version
+        self.description = description
+        self.credit = credit
+        self.creditGithubID = creditGithubID
+    }
 }
 
 struct PluginListing: Equatable, Identifiable, Sendable {
     let manifest: PluginManifest
     let path: String
     let sha256: String
+    let bundled: Bool
+
+    init(manifest: PluginManifest, path: String, sha256: String, bundled: Bool = false) {
+        self.manifest = manifest
+        self.path = path
+        self.sha256 = sha256
+        self.bundled = bundled
+    }
 
     var id: String { manifest.id }
 }
@@ -32,7 +53,14 @@ enum PluginRepository {
     static let roomBindingID = "room-binding"
     static let contentLimit = 128 * 1024
     static let manifestLimit = 16 * 1024
-    private static let roomFilter = "device.room-filter"
+    private static let capabilities = [
+        roomBindingID: "device.room-filter",
+        InstalledPlugins.nearbyID: "device.nearby",
+        InstalledPlugins.consumptionTrendID: "bill.consumption-trend",
+        InstalledPlugins.keepScreenOnID: "usage.keep-screen-on",
+        InstalledPlugins.backgroundID: "appearance.background",
+        InstalledPlugins.runtimeLogID: "diagnostics.runtime-log"
+    ]
     private static let baseURL = "https://raw.giteeusercontent.com/yehu-imei/linyu-plugins/raw/main/"
 
     private final class NoRedirect: NSObject, URLSessionTaskDelegate {
@@ -57,17 +85,71 @@ enum PluginRepository {
         return URLSession(configuration: configuration, delegate: NoRedirect(), delegateQueue: nil)
     }()
 
+    static let bundledCatalog: [PluginListing] = {
+        guard let url = Bundle.main.url(forResource: "linyu_bundled_plugins", withExtension: "json"),
+              let data = try? Data(contentsOf: url) else { return [] }
+        return (try? parseCatalog(data))?.map {
+            PluginListing(manifest: $0.manifest, path: $0.path, sha256: $0.sha256, bundled: true)
+        } ?? []
+    }()
+
     static func fetchCatalog() async throws -> [PluginListing] {
         let data = try await fetch("catalog.json")
-        return try parseCatalog(data)
+        let remote = try parseCatalog(data)
+        let updates = Dictionary(uniqueKeysWithValues: remote.map { ($0.id, $0) })
+        let local = bundledCatalog.map { bundled in
+            guard let entry = updates[bundled.id], isUpdate(bundled.manifest, entry.manifest) else { return bundled }
+            return entry
+        }
+        return remote.filter { item in !local.contains(where: { $0.id == item.id }) } + local
     }
 
     static func download(_ listing: PluginListing) async throws -> PluginManifest {
+        if listing.bundled {
+            guard bundledCatalog.contains(listing) else { throw PluginError("插件清单无效") }
+            return listing.manifest
+        }
         guard packagePath(for: listing.manifest) == listing.path else {
             throw PluginError("插件下载地址无效")
         }
         let data = try await fetch(listing.path)
         return try verifyDownload(listing, data: data)
+    }
+
+    static func fetchGithubLogins(_ manifests: [PluginManifest]) async -> [Int64: String] {
+        let ids = Set(manifests.compactMap(\.creditGithubID))
+        return await withTaskGroup(of: (Int64, String?).self) { group in
+            for id in ids {
+                group.addTask { (id, await githubLogin(id)) }
+            }
+            var logins: [Int64: String] = [:]
+            for await (id, login) in group { logins[id] = login }
+            return logins
+        }
+    }
+
+    private static func githubLogin(_ id: Int64) async -> String? {
+        let key = "pluginCredit.github.\(id)"
+        let defaults = UserDefaults.standard
+        let cached = defaults.string(forKey: key)
+        let now = Date().timeIntervalSince1970
+        let age = now - defaults.double(forKey: key + ".time")
+        if let cached, (0..<86_400).contains(age) { return cached }
+
+        guard let url = URL(string: "https://api.github.com/user/\(id)") else { return cached }
+        var request = URLRequest(url: url, timeoutInterval: 4)
+        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        guard let (data, response) = try? await session.data(for: request),
+              let http = response as? HTTPURLResponse, http.statusCode == 200,
+              data.count <= manifestLimit,
+              let json = try? jsonObject(data, error: "GitHub 账户无效"),
+              positiveInt(json["id"]) == id,
+              let login = json["login"] as? String,
+              login.range(of: "^[A-Za-z0-9-]{1,39}$", options: .regularExpression) != nil else { return cached }
+
+        defaults.set(login, forKey: key)
+        defaults.set(now, forKey: key + ".time")
+        return login
     }
 
     static func readFile(_ url: URL) async throws -> PluginManifest {
@@ -113,7 +195,7 @@ enum PluginRepository {
         }
         var seen = Set<String>()
         return try entries.compactMap { item in
-            guard item["id"] as? String == roomBindingID, isFormatOne(item) else { return nil }
+            guard let id = item["id"] as? String, capabilities[id] != nil, isFormatOne(item) else { return nil }
             let manifest = try parseManifest(item)
             guard let path = item["path"] as? String, path == packagePath(for: manifest),
                   let checksum = item["sha256"] as? String, isSHA256(checksum) else {
@@ -147,15 +229,18 @@ enum PluginRepository {
     }
 
     static func manifestData(_ manifest: PluginManifest) -> Data? {
-        let json: [String: Any] = [
+        guard let capability = capabilities[manifest.id] else { return nil }
+        var json: [String: Any] = [
             "id": manifest.id,
             "name": manifest.name,
             "author": manifest.author,
             "version": manifest.version,
             "description": manifest.description,
             "formatVersion": 1,
-            "capabilities": [roomFilter]
+            "capabilities": [capability]
         ]
+        if let credit = manifest.credit { json["credit"] = credit }
+        if let id = manifest.creditGithubID { json["creditGithubId"] = id }
         guard (try? parseManifest(json)) == manifest else { return nil }
         return try? JSONSerialization.data(withJSONObject: json)
     }
@@ -189,8 +274,8 @@ enum PluginRepository {
     }
 
     private static func parseManifest(_ json: [String: Any]) throws -> PluginManifest {
-        guard json["id"] as? String == roomBindingID, isFormatOne(json),
-              json["capabilities"] as? [String] == [roomFilter] else {
+        guard let id = json["id"] as? String, let capability = capabilities[id], isFormatOne(json),
+              json["capabilities"] as? [String] == [capability] else {
             throw PluginError("当前版本不支持此插件")
         }
         guard let version = json["version"] as? String, versionParts(version) != nil else {
@@ -203,13 +288,19 @@ enum PluginRepository {
             }
             return value
         }
-        return try PluginManifest(id: roomBindingID, name: required("name", limit: 48),
+        let credit: String? = json["credit"] == nil ? nil : try required("credit", limit: 48)
+        let creditID = positiveInt(json["creditGithubId"])
+        guard json["creditGithubId"] == nil || (creditID != nil && credit != nil) else {
+            throw PluginError("插件贡献者无效")
+        }
+        return try PluginManifest(id: id, name: required("name", limit: 48),
                                   author: required("author", limit: 48), version: version,
-                                  description: required("description", limit: 300))
+                                  description: required("description", limit: 300), credit: credit,
+                                  creditGithubID: creditID)
     }
 
     private static func packagePath(for manifest: PluginManifest) -> String? {
-        guard manifest.id == roomBindingID, versionParts(manifest.version) != nil else { return nil }
+        guard capabilities[manifest.id] != nil, versionParts(manifest.version) != nil else { return nil }
         return "packages/\(manifest.id)-\(manifest.version).zip"
     }
 
@@ -235,12 +326,69 @@ enum PluginRepository {
         return version.stringValue == "1"
     }
 
+    private static func positiveInt(_ value: Any?) -> Int64? {
+        guard let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID(),
+              let integer = Int64(number.stringValue), integer > 0 else { return nil }
+        return integer
+    }
+
     private static func jsonObject(_ data: Data, error: String) throws -> [String: Any] {
         guard let string = String(data: data, encoding: .utf8),
               let object = try? JSONSerialization.jsonObject(with: Data(string.utf8)),
               let json = object as? [String: Any] else { throw PluginError(error) }
         return json
     }
+}
+
+enum InstalledPlugins {
+    static let roomBindingID = PluginRepository.roomBindingID
+    static let nearbyID = "nearby-devices"
+    static let consumptionTrendID = "consumption-trend"
+    static let keepScreenOnID = "keep-screen-on"
+    static let backgroundID = "background"
+    static let runtimeLogID = "runtime-log"
+    private static let lock = NSLock()
+
+    static var all: [PluginManifest] {
+        PluginRepository.bundledCatalog.compactMap { installed($0.manifest.id) } + [RoomBindingPlugin.installed].compactMap { $0 }
+    }
+
+    static func isInstalled(_ id: String) -> Bool { installed(id) != nil }
+
+    private static func installed(_ id: String, defaults: UserDefaults = .standard,
+                                  bundled: [PluginListing] = PluginRepository.bundledCatalog) -> PluginManifest? {
+        if id == roomBindingID { return RoomBindingPlugin.installed(in: defaults) }
+        guard let bundled = bundled.first(where: { $0.id == id }) else { return nil }
+        guard let stored = defaults.data(forKey: key(id)) else { return bundled.manifest }
+        guard !stored.isEmpty, let manifest = try? PluginRepository.parsePackage(stored), manifest.id == id else { return nil }
+        return manifest
+    }
+
+    @discardableResult
+    static func install(_ manifest: PluginManifest, defaults: UserDefaults = .standard,
+                        bundled: [PluginListing] = PluginRepository.bundledCatalog) -> Bool {
+        if manifest.id == roomBindingID { return RoomBindingPlugin.install(manifest, defaults: defaults) }
+        lock.lock()
+        defer { lock.unlock() }
+        guard bundled.contains(where: { $0.id == manifest.id }), let data = PluginRepository.manifestData(manifest) else { return false }
+        if let current = installed(manifest.id, defaults: defaults, bundled: bundled),
+           !PluginRepository.isUpdate(current, manifest) { return false }
+        defaults.set(data, forKey: key(manifest.id))
+        return true
+    }
+
+    @discardableResult
+    static func uninstall(_ id: String, defaults: UserDefaults = .standard,
+                          bundled: [PluginListing] = PluginRepository.bundledCatalog) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard installed(id, defaults: defaults, bundled: bundled) != nil else { return false }
+        if id == roomBindingID { return RoomBindingPlugin.uninstall(defaults: defaults) }
+        defaults.set(Data(), forKey: key(id))
+        return true
+    }
+
+    private static func key(_ id: String) -> String { "featurePlugin.\(id)" }
 }
 
 /// 只保存已安装清单和寝室筛选，订单和使用历史由主程序维护。
@@ -259,7 +407,8 @@ enum RoomBindingPlugin {
         lock.lock()
         defer { lock.unlock() }
         if let data = defaults.data(forKey: manifestKey) {
-            return try? PluginRepository.parsePackage(data)
+            let manifest = try? PluginRepository.parsePackage(data)
+            return manifest?.id == PluginRepository.roomBindingID ? manifest : nil
         }
         guard defaults.object(forKey: manifestKey) == nil,
               !readRoom(defaults).isEmpty,
@@ -285,7 +434,8 @@ enum RoomBindingPlugin {
     static func install(_ manifest: PluginManifest, defaults: UserDefaults = .standard) -> Bool {
         lock.lock()
         defer { lock.unlock() }
-        guard let data = PluginRepository.manifestData(manifest) else { return false }
+        guard manifest.id == PluginRepository.roomBindingID,
+              let data = PluginRepository.manifestData(manifest) else { return false }
         if let current = installed(in: defaults), !PluginRepository.isUpdate(current, manifest) {
             return false
         }

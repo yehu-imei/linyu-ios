@@ -76,10 +76,13 @@ struct HomeDeviceLayout: Codable, Equatable {
         if hidden.remove(section) == nil { hidden.insert(section) }
     }
 
-    mutating func moveSection(_ section: HomeDeviceSection, by offset: Int) {
+    mutating func moveSection(_ section: HomeDeviceSection, by offset: Int, excluding excluded: Set<HomeDeviceSection> = []) {
         var ordered = sections
-        guard let index = ordered.firstIndex(of: section), Self.move(&ordered, from: index, by: offset)
-        else { return }
+        let editable = ordered.filter { !excluded.contains($0) }
+        guard offset == -1 || offset == 1, let index = editable.firstIndex(of: section),
+              editable.indices.contains(index + offset), let source = ordered.firstIndex(of: section),
+              let destination = ordered.firstIndex(of: editable[index + offset]) else { return }
+        ordered.swapAt(source, destination)
         order = ordered
     }
 

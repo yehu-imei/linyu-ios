@@ -27,7 +27,7 @@ struct WidgetPageIntent: AppIntent {
         let started = Date()
         let snapshot = WidgetSharedStore.read()
         var value = WidgetSharedStore.selection(slot, owner: snapshot.owner)
-        let target = min(2, max(0, page))
+        let target = snapshot.visibleTab(min(2, max(0, page)))
         guard value.owner != snapshot.owner || value.tab != target else { return .result() }
         value.owner = snapshot.owner
         value.tab = target
@@ -46,7 +46,8 @@ struct WidgetPickIntent: AppIntent {
     init(slot: String, sn: String, token: String) { self.slot = slot; self.sn = sn; self.token = token }
     func perform() async throws -> some IntentResult {
         let snapshot = WidgetSharedStore.read()
-        guard snapshot.token == token, !snapshot.owner.isEmpty, let device = snapshot.selected(sn) else { return .result() }
+        guard snapshot.showsNearby, snapshot.token == token, !snapshot.owner.isEmpty,
+              let device = snapshot.selected(sn) else { return .result() }
         WidgetSharedStore.select(.init(owner: snapshot.owner, device: device.id, tab: 0), slot: slot)
         return .result()
     }
@@ -126,6 +127,7 @@ struct LinYuWidgetView: View {
     var familyOverride: WidgetFamily? = nil
     private var family: WidgetFamily { familyOverride ?? systemFamily }
     private var snapshot: WidgetSnapshot { entry.snapshot }
+    private var tab: Int { snapshot.visibleTab(entry.selection.tab) }
     private var device: WidgetDevice? { snapshot.displayedDevice(entry.selection.device) }
     private var staleBusy: Bool { snapshot.busy && entry.date.timeIntervalSince(snapshot.date) > 30 }
     private var stateColor: Color { device?.running == true ? Color(red: 0.376, green: 0.647, blue: 0.98) : device?.occupied == true ? .orange : Color(red: 0.29, green: 0.87, blue: 0.50) }
@@ -138,7 +140,7 @@ struct LinYuWidgetView: View {
     private var action: WidgetCommandKind {
         if staleBusy { return .refresh }
         if snapshot.owner.isEmpty { return .home }
-        guard let device else { return .nearby }
+        guard let device else { return snapshot.showsNearby ? .nearby : .home }
         return device.running ? .stop : .start
     }
     private var title: String {
@@ -162,7 +164,7 @@ struct LinYuWidgetView: View {
                 .overlay(LinearGradient(stops: [.init(color: .white.opacity(0.20), location: 0), .init(color: .white.opacity(0.05), location: 0.45), .init(color: .clear, location: 1)], startPoint: .top, endPoint: .bottom))
                 .overlay(ContainerRelativeShape().strokeBorder(.white.opacity(0.18), lineWidth: 1))
         }
-        .widgetURL(url(entry.selection.tab == 2 && layout == "wide" ? .bills : .home))
+        .widgetURL(url(tab == 2 && layout == "wide" ? .bills : .home))
         .transition(.identity)
         .contentTransition(.identity)
         .animation(nil, value: entry.selection.tab)
@@ -220,22 +222,23 @@ struct LinYuWidgetView: View {
     private var wide: some View {
         HStack(spacing: 0) {
             VStack(spacing: 0) {
-                ForEach(0..<3) { index in
+                ForEach(snapshot.showsNearby ? [0, 1, 2] : [0, 2], id: \.self) { index in
                     Button(intent: WidgetPageIntent(slot: entry.slot, page: index)) {
                         AndroidWidgetGlyph(kind: ["clock", "bluetooth", "card"][index]).frame(width: 20, height: 20)
                             .frame(width: 38, height: 38)
-                            .background(.white.opacity(entry.selection.tab == index ? 0.18 : 0), in: RoundedRectangle(cornerRadius: 10))
+                            .background(.white.opacity(tab == index ? 0.18 : 0), in: RoundedRectangle(cornerRadius: 10))
                     }.frame(maxHeight: .infinity).accessibilityLabel(["设备", "附近设备", "账单"][index])
                 }
             }.frame(width: 48).padding(.vertical, 4)
             Rectangle().fill(.white.opacity(0.16)).frame(width: 1)
             Group {
-            if entry.selection.tab == 1 { nearby }
-            else if entry.selection.tab == 2 { bills }
+            if tab == 1 { nearby }
+            else if tab == 2 { bills }
             else {
                 VStack(alignment: .leading, spacing: 5) {
                     header
-                    Text(device?.detail ?? "点按钮选附近设备").font(.system(size: 9)).foregroundStyle(.white.opacity(0.65)).lineLimit(1).padding(.leading, 10)
+                    Text(device?.detail ?? (snapshot.showsNearby ? "点按钮选附近设备" : "点此打开淋浴"))
+                        .font(.system(size: 9)).foregroundStyle(.white.opacity(0.65)).lineLimit(1).padding(.leading, 10)
                     HStack(spacing: 10) { readout; power.frame(width: 64) }
                 }
             }

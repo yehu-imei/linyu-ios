@@ -45,13 +45,17 @@ import WidgetKit
         needsReload = false
         reloadTask?.cancel()
         reloadTask = nil
-        WidgetSharedStore.write(WidgetSnapshot())
+        var empty = WidgetSnapshot()
+        if !InstalledPlugins.isInstalled(InstalledPlugins.nearbyID) { empty.nearbyDisabled = true }
+        WidgetSharedStore.write(empty)
         WidgetCenter.shared.reloadAllTimelines()
     }
     func sync(store: AppDataStore, flow: ShowerFlow, scanner: BLEScanner, force: Bool = false) {
         guard store.sessionIsCurrent else { return }
         let previous = lastSnapshot ?? WidgetSharedStore.read()
         var next = WidgetSnapshot()
+        let nearbyEnabled = InstalledPlugins.isInstalled(InstalledPlugins.nearbyID)
+        next.nearbyDisabled = nearbyEnabled ? nil : true
         next.owner = AppNotifications.accountKey
         next.lastDevice = Prefs.lastDeviceSnCode
         next.balanceTitle = BalanceEstimator.title
@@ -110,17 +114,19 @@ import WidgetKit
             infos[order.snCode] = WidgetDevice(id: order.snCode, name: order.deviceName, detail: "使用中的设备", emoji: order.deviceEmoji,
                 selectable: room.isEmpty, aliases: [order.deviceMac].filter { !$0.isEmpty })
         }
-        for item in scanner.devices.sorted(by: { $0.rssi > $1.rssi }) {
-            guard let address = item.parsedSnCode else { continue }
-            let sn = store.deviceInfos[address]?.snCode.flatMap { $0.isEmpty ? nil : $0 } ?? address
-            guard infos[sn] != nil else { continue }
-            infos[sn]?.rssi = item.rssi
-            if !next.nearbyIDs.contains(sn) { next.nearbyIDs.append(sn) }
+        if nearbyEnabled {
+            for item in scanner.devices.sorted(by: { $0.rssi > $1.rssi }) {
+                guard let address = item.parsedSnCode else { continue }
+                let sn = store.deviceInfos[address]?.snCode.flatMap { $0.isEmpty ? nil : $0 } ?? address
+                guard infos[sn] != nil else { continue }
+                infos[sn]?.rssi = item.rssi
+                if !next.nearbyIDs.contains(sn) { next.nearbyIDs.append(sn) }
+            }
+            if scanner.devices.isEmpty, previous.owner == next.owner {
+                next.nearbyIDs = previous.nearbyIDs.filter { infos[$0] != nil }
+                next.nearbyDate = previous.nearbyDate
+            } else { next.nearbyDate = scanner.devices.map(\.lastSeen).max() }
         }
-        if scanner.devices.isEmpty, previous.owner == next.owner {
-            next.nearbyIDs = previous.nearbyIDs.filter { infos[$0] != nil }
-            next.nearbyDate = previous.nearbyDate
-        } else { next.nearbyDate = scanner.devices.map(\.lastSeen).max() }
         for sn in Array(infos.keys) {
             infos[sn]?.occupied = flow.deviceOwner[sn] == false
             if let item = infos[sn] {
@@ -190,6 +196,9 @@ import WidgetKit
         guard let request = command, request.kind.isNavigation else { return nil }
         command = nil
         acceptedSnapshot = nil
+        if request.kind == .nearby || request.kind == .device {
+            guard InstalledPlugins.isInstalled(InstalledPlugins.nearbyID) else { return .home }
+        }
         if request.kind == .device || request.kind == .billDetail {
             guard request.owner == AppNotifications.accountKey else { return .home }
             if request.kind == .device { pendingDeviceSN = request.sn }
@@ -206,6 +215,8 @@ import WidgetKit
         acceptedSnapshot = nil
         command = nil
         guard Session.shared.isLoggedIn else { return .home }
+        if request.kind == .refreshNearby,
+           !InstalledPlugins.isInstalled(InstalledPlugins.nearbyID) { return .home }
         guard request.matches(snapshot), request.owner == AppNotifications.accountKey else {
             flow.toast = "组件状态已更新，请刷新后操作"
             sync(store: store, flow: flow, scanner: scanner, force: true)

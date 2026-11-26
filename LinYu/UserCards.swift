@@ -303,7 +303,7 @@ struct TrendToggleCardView: View {
 
 struct KeepScreenOnCardView: View {
     @Environment(\.appColors) private var colors
-    @AppStorage("keepScreenOnDuringUse") private var enabled = true
+    @AppStorage("keepScreenOnDuringUse") private var enabled = false
 
     var body: some View {
         BaseCard {

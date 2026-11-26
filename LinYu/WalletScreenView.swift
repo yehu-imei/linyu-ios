@@ -15,6 +15,7 @@ struct WalletScreenView: View {
     @ObservedObject var flow: ShowerFlow
     /// 未支付账单 + 代扣（对照 Android 的 MainViewModel 同名部分）
     @ObservedObject var deduct: DeductService
+    let trendPluginInstalled: Bool
 
     @State private var detailBill: BillDTO?
     /// 待确认的代扣账单。这是动钱的操作，不弹确认框直接扣太莽了
@@ -67,7 +68,7 @@ struct WalletScreenView: View {
                     balanceCard
                         .padding(.top, 16)
 
-                    if trendEnabled {
+                    if trendPluginInstalled && trendEnabled {
                         SpendingTrendCard(bills: store.bills, loading: store.loading && !store.loaded)
                             .padding(.top, 24)
                     }

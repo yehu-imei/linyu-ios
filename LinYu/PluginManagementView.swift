@@ -2,32 +2,53 @@ import Foundation
 import SwiftUI
 import UniformTypeIdentifiers
 
+private struct PluginCardPositions: PreferenceKey {
+    static let defaultValue: [String: CGFloat] = [:]
+
+    static func reduce(value: inout [String: CGFloat], nextValue: () -> [String: CGFloat]) {
+        value.merge(nextValue()) { _, latest in latest }
+    }
+}
+
 @MainActor
 struct PluginManagementView: View {
     @Environment(\.appColors) private var colors
 
-    let installed: PluginManifest?
+    let installed: [PluginManifest]
+    let backgroundPluginInstalled: Bool
     let onInstall: (PluginManifest) -> Bool
-    let onUninstall: () -> Bool
+    let onUninstall: (String) -> Bool
+    let onMove: (String, String) -> Void
     let onDismiss: () -> Void
     let onMessage: (String) -> Void
 
+    private static let listSpace = "installedPluginList"
+
     private enum Panel {
         case details(PluginManifest)
-        case delete(PluginManifest)
+        case delete(String)
+    }
+
+    private struct CardDrag {
+        let id: String
+        let offset: CGFloat
     }
 
     @State private var showingMarket = false
     @State private var importingFile = false
-    @State private var catalog: [PluginListing]?
+    @State private var catalog = PluginRepository.bundledCatalog
     @State private var catalogFailed = false
+    @State private var creditRefresh = 0
+    @State private var githubLogins: [Int64: String] = [:]
     @State private var panel: Panel?
     @State private var request: Task<Void, Never>?
+    @State private var cardPositions: [String: CGFloat] = [:]
+    @GestureState private var drag: CardDrag?
 
     private var busy: Bool { request != nil }
-    private var availableUpdate: PluginListing? {
-        guard let installed else { return nil }
-        return catalog?.first { PluginRepository.isUpdate(installed, $0.manifest) }
+    private var canReorder: Bool { installed.count > 1 && !busy }
+    private func availableUpdate(for plugin: PluginManifest) -> PluginListing? {
+        catalog.first { PluginRepository.isUpdate(plugin, $0.manifest) }
     }
 
     var body: some View {
@@ -36,7 +57,7 @@ struct PluginManagementView: View {
                 .ignoresSafeArea()
                 .onTapGesture {}
                 .accessibilityHidden(true)
-            AppBackground(scope: .home)
+            AppBackground(scope: .home, backgroundPluginInstalled: backgroundPluginInstalled)
             VStack(spacing: 0) {
                 header
                 if busy {
@@ -49,15 +70,21 @@ struct PluginManagementView: View {
                     LazyVStack(spacing: 10) {
                         if showingMarket {
                             marketContent
-                        } else if let installed {
-                            installedCard(installed)
-                        } else {
+                        } else if installed.isEmpty {
                             emptyMessage("暂无已安装的插件")
+                        } else {
+                            ForEach(installed) { plugin in
+                                installedCard(plugin)
+                            }
                         }
                     }
                     .padding(.horizontal, PageLayout.horizontalInset)
-                    .padding(.vertical, 12)
+                    .padding(.top, 16)
+                    .padding(.bottom, 12)
                 }
+                .coordinateSpace(name: Self.listSpace)
+                .scrollDisabled(drag != nil)
+                .onPreferenceChange(PluginCardPositions.self) { cardPositions = $0 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .allowsHitTesting(panel == nil)
@@ -86,6 +113,13 @@ struct PluginManagementView: View {
                 }
             }
         }
+        .task(id: creditRefresh) {
+            let manifests = installed + catalog.map(\.manifest)
+            let logins = await PluginRepository.fetchGithubLogins(manifests)
+            guard !Task.isCancelled else { return }
+            githubLogins.merge(logins) { _, refreshed in refreshed }
+        }
+        .onChange(of: Set(installed.compactMap(\.creditGithubID))) { _ in creditRefresh += 1 }
         .onDisappear { request?.cancel() }
     }
 
@@ -97,7 +131,7 @@ struct PluginManagementView: View {
             .buttonStyle(InstantButtonStyle())
             .accessibilityLabel(showingMarket ? "返回插件管理" : "返回设置")
 
-            Text(showingMarket ? "插件市场" : "插件管理")
+            Text(showingMarket ? "插件仓库" : "插件管理")
                 .font(.system(size: 22, weight: .bold))
                 .foregroundStyle(colors.textPrimary)
                 .accessibilityAddTraits(.isHeader)
@@ -119,12 +153,12 @@ struct PluginManagementView: View {
                         showingMarket = true
                         checkCatalog(reportUpdates: false)
                     } label: {
-                        Label("去插件市场", systemImage: "cart")
+                        Label("浏览插件仓库", systemImage: "cart")
                     }
                     Button {
                         importingFile = true
                     } label: {
-                        Label("从文件安装", systemImage: "doc.badge.plus")
+                        Label("选择文件安装", systemImage: "doc.badge.plus")
                     }
                 } label: {
                     headerIcon("plus")
@@ -136,6 +170,7 @@ struct PluginManagementView: View {
         .frame(height: PageLayout.titleHeight)
         .frame(height: PageLayout.headerHeight, alignment: .top)
         .padding(.horizontal, PageLayout.horizontalInset)
+        .padding(.top, 20)
     }
 
     private func headerIcon(_ name: String) -> some View {
@@ -147,7 +182,8 @@ struct PluginManagementView: View {
     }
 
     private func installedCard(_ plugin: PluginManifest) -> some View {
-        HStack(spacing: 0) {
+        let update = availableUpdate(for: plugin)
+        return HStack(spacing: 0) {
             Button {
                 panel = .details(plugin)
             } label: {
@@ -157,7 +193,7 @@ struct PluginManagementView: View {
                         Text("版本 \(plugin.version)")
                             .font(.system(size: 13))
                             .foregroundStyle(colors.textSecondary)
-                        if availableUpdate != nil {
+                        if update != nil {
                             Text("可更新")
                                 .font(.system(size: 11, weight: .medium))
                                 .foregroundStyle(colors.warning)
@@ -176,14 +212,14 @@ struct PluginManagementView: View {
 
             Menu {
                 Button {
-                    guard let availableUpdate else { return }
-                    download(availableUpdate, updating: true)
+                    guard let update else { return }
+                    download(update, updating: true)
                 } label: {
                     Label("更新", systemImage: "arrow.clockwise")
                 }
-                .disabled(availableUpdate == nil)
+                .disabled(update == nil)
                 Button(role: .destructive) {
-                    panel = .delete(plugin)
+                    panel = .delete(plugin.id)
                 } label: {
                     Label("删除", systemImage: "trash")
                 }
@@ -198,47 +234,98 @@ struct PluginManagementView: View {
             .accessibilityLabel("\(plugin.name)操作")
             .disabled(busy)
 
-            Image(systemName: "line.3.horizontal")
-                .font(.system(size: 18, weight: .medium))
-                .foregroundStyle(colors.textSecondary.opacity(0.35))
-                .frame(width: 40, height: 44)
-                .accessibilityHidden(true)
+            reorderHandle(plugin)
         }
         .padding(.trailing, 4)
         .linyuCard(colors)
+        .background {
+            GeometryReader { geometry in
+                Color.clear.preference(key: PluginCardPositions.self, value: [
+                    plugin.id: geometry.frame(in: .named(Self.listSpace)).midY
+                ])
+            }
+        }
+        .offset(y: drag?.id == plugin.id ? drag?.offset ?? 0 : 0)
+        .zIndex(drag?.id == plugin.id ? 1 : 0)
+    }
+
+    private func reorderHandle(_ plugin: PluginManifest) -> some View {
+        Image(systemName: "line.3.horizontal")
+            .font(.system(size: 17, weight: .semibold))
+            .foregroundStyle(colors.textSecondary.opacity(canReorder ? 1 : 0.35))
+            .frame(width: 44, height: 44)
+            .contentShape(Rectangle())
+            .highPriorityGesture(
+                DragGesture(minimumDistance: 4, coordinateSpace: .named(Self.listSpace))
+                    .updating($drag) { value, drag, _ in
+                        drag = CardDrag(id: plugin.id, offset: value.translation.height)
+                    }
+                    .onEnded { value in
+                        let target = cardPositions.min { left, right in
+                            let y = value.location.y
+                            let leftCenter = left.key == plugin.id ? value.startLocation.y : left.value
+                            let rightCenter = right.key == plugin.id ? value.startLocation.y : right.value
+                            return abs(leftCenter - y) < abs(rightCenter - y)
+                        }
+                        if let target { onMove(plugin.id, target.key) }
+                    },
+                including: canReorder ? .all : .none
+            )
+            .accessibilityLabel("拖动排序")
+            .accessibilityAdjustableAction { direction in
+                guard let index = installed.firstIndex(where: { $0.id == plugin.id }) else { return }
+                switch direction {
+                case .increment:
+                    if index < installed.count - 1 { onMove(plugin.id, installed[index + 1].id) }
+                case .decrement:
+                    if index > 0 { onMove(plugin.id, installed[index - 1].id) }
+                @unknown default:
+                    break
+                }
+            }
+            .accessibilityHidden(!canReorder)
     }
 
     @ViewBuilder private var marketContent: some View {
-        if let catalog {
+        if catalogFailed {
             if catalog.isEmpty {
-                emptyMessage("暂无可用插件")
+                emptyMessage("无法读取插件目录")
+                retryCatalogButton
             } else {
-                ForEach(catalog, id: \.manifest.id) { listing in
-                    marketCard(listing)
+                HStack {
+                    Text("暂时无法访问在线插件仓库")
+                        .font(.system(size: 13))
+                        .foregroundStyle(colors.textSecondary)
+                    Spacer(minLength: 6)
+                    retryCatalogButton
                 }
             }
-        } else if catalogFailed {
-            emptyMessage("无法读取插件目录")
-            Button("重试") { checkCatalog(reportUpdates: false) }
-                .buttonStyle(InstantButtonStyle())
-                .foregroundStyle(colors.accent)
-                .frame(minHeight: 44)
+        } else if catalog.isEmpty, !busy {
+            emptyMessage("暂无可用插件")
         }
+        ForEach(catalog) { listing in
+            marketCard(listing)
+        }
+    }
+
+    private var retryCatalogButton: some View {
+        Button("重试") { checkCatalog(reportUpdates: false) }
+            .buttonStyle(InstantButtonStyle())
+            .foregroundStyle(colors.accent)
+            .frame(minHeight: 44)
     }
 
     private func marketCard(_ listing: PluginListing) -> some View {
         let plugin = listing.manifest
-        let isInstalled = installed?.id == plugin.id
-        let canUpdate = installed.map { PluginRepository.isUpdate($0, plugin) } ?? false
+        let current = installed.first { $0.id == plugin.id }
+        let canUpdate = current.map { PluginRepository.isUpdate($0, plugin) } ?? false
         return HStack(spacing: 10) {
             Button {
                 panel = .details(plugin)
             } label: {
                 VStack(alignment: .leading, spacing: 4) {
                     name(plugin)
-                    Text("作者 \(plugin.author) · 版本 \(plugin.version)")
-                        .font(.system(size: 12))
-                        .foregroundStyle(colors.textSecondary)
+                    attribution(plugin, size: 12)
                     Text(plugin.description)
                         .font(.system(size: 13))
                         .foregroundStyle(colors.textSecondary)
@@ -249,7 +336,7 @@ struct PluginManagementView: View {
             }
             .buttonStyle(.plain)
 
-            if !isInstalled || canUpdate {
+            if current == nil || canUpdate {
                 Button(canUpdate ? "更新" : "安装") {
                     download(listing, updating: canUpdate)
                 }
@@ -273,6 +360,18 @@ struct PluginManagementView: View {
             .lineLimit(1)
     }
 
+    private func attribution(_ plugin: PluginManifest, size: CGFloat) -> some View {
+        let suggestion = plugin.creditGithubID.flatMap { githubLogins[$0] }.map { "@\($0)" } ?? plugin.credit
+        return VStack(alignment: .leading, spacing: 4) {
+            Text("作者 \(plugin.author) · 版本 \(plugin.version)")
+            if let suggestion {
+                Text("功能建议 \(suggestion)")
+            }
+        }
+        .font(.system(size: size))
+        .foregroundStyle(colors.textSecondary)
+    }
+
     private func emptyMessage(_ message: String) -> some View {
         Text(message)
             .font(.system(size: 14))
@@ -289,9 +388,7 @@ struct PluginManagementView: View {
                     AlertCard(title: plugin.name, titleAlign: .leading,
                               contentSpacing: 10, actionSpacing: 0, cardPadding: 22) {
                         VStack(alignment: .leading, spacing: 10) {
-                            Text("作者 \(plugin.author) · 版本 \(plugin.version)")
-                                .font(.system(size: 13))
-                                .foregroundStyle(colors.textSecondary)
+                            attribution(plugin, size: 13)
                             Text(plugin.description)
                                 .font(.system(size: 15))
                                 .foregroundStyle(colors.textPrimary)
@@ -301,15 +398,15 @@ struct PluginManagementView: View {
                         EmptyView()
                     }
                 }
-            case let .delete(plugin):
+            case let .delete(id):
                 ConfirmDialogView(
-                    title: "删除\(plugin.name)？",
-                    message: "将清除当前绑定，首页和桌面小组件恢复显示附近设备。",
+                    title: "删除插件",
+                    message: "确定删除这个插件？",
                     confirmTitle: "删除",
                     destructive: true,
                     onConfirm: {
                         self.panel = nil
-                        onMessage(onUninstall() ? "已删除" : "删除失败，请重试")
+                        onMessage(onUninstall(id) ? "已删除" : "删除失败，请重试")
                     },
                     onDismiss: { self.panel = nil }
                 )
@@ -336,11 +433,17 @@ struct PluginManagementView: View {
                 let entries = try await PluginRepository.fetchCatalog()
                 try Task.checkCancellation()
                 catalog = entries
+                creditRefresh += 1
                 if reportUpdates {
-                    if installed == nil {
+                    let updateCount = installed.filter { plugin in
+                        entries.contains { PluginRepository.isUpdate(plugin, $0.manifest) }
+                    }.count
+                    if installed.isEmpty {
                         onMessage("暂无已安装的插件")
+                    } else if updateCount == 0 {
+                        onMessage("插件均为最新版本")
                     } else {
-                        onMessage(availableUpdate == nil ? "插件均为最新版本" : "有 1 个插件可更新")
+                        onMessage("有 \(updateCount) 个插件可更新")
                     }
                 }
             } catch {
