@@ -1,12 +1,10 @@
 import SwiftUI
+import UIKit
 
 /// 用水页 —— 逐条对照 Android 的 `ShowerScreen.kt`。
 ///
 /// 布局是**垂直居中**的一列：图标 → 状态 → 位置 → 预扣卡片 → 计时 → 结束按钮。
 /// 背景是纵向渐变（浅色冷蓝 `E3F2FD→90CAF9`、深色靛蓝 `1A237E→3949AB`），不是纯色。
-///
-/// ⚠️ 左下角那行「费率 0.041元/升」是硬编码的说明文字，Android 也是写死的
-/// （服务端费率不在本地，写死的是**这个项目的默认费率**，仅作参考）。
 struct ShowerScreenView: View {
     let emoji: String
     let statusText: String
@@ -20,6 +18,9 @@ struct ShowerScreenView: View {
 
     @Environment(\.appColors) private var colors
     @Environment(\.isDarkMode) private var isDark
+    @Environment(\.scenePhase) private var scenePhase
+    @AppStorage("keepScreenOnDuringUse") private var keepScreenOn = true
+    @State private var previousIdleTimerSetting: Bool?
     @ObservedObject private var backgrounds = BackgroundStore.shared
 
     private var timeText: String {
@@ -99,6 +100,11 @@ struct ShowerScreenView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                     .padding(.top, 24)
 
+                    Text(keepScreenOn ? "屏幕常亮：开" : "屏幕常亮：关")
+                        .font(.system(size: 12))
+                        .foregroundStyle(colors.textSecondary)
+                        .padding(.top, 8)
+
                     // 自动关停倒计时
                     if autoDisConSec > 0 {
                         HStack(spacing: 8) {
@@ -142,7 +148,7 @@ struct ShowerScreenView: View {
                     .shadow(color: Color(hex: 0xE53935).opacity(0.25), radius: 4, y: 2)
                     .padding(.top, 48)
 
-                    Text("费率: 0.041元/升 · 设备: \(String(location.suffix(6)))")
+                    Text("设备: \(String(location.suffix(6)))")
                         .font(.system(size: 11))
                         .foregroundStyle(colors.textSecondary)
                         .multilineTextAlignment(.center)
@@ -167,5 +173,25 @@ struct ShowerScreenView: View {
             .padding(.leading, 8)
             .padding(.top, 8)
         }
+        .onAppear { updateScreenAwake() }
+        .onChange(of: scenePhase) { _ in updateScreenAwake() }
+        .onChange(of: keepScreenOn) { _ in updateScreenAwake() }
+        .onDisappear { restoreIdleTimer() }
+    }
+
+    private func updateScreenAwake() {
+        guard keepScreenOn, scenePhase == .active else {
+            restoreIdleTimer()
+            return
+        }
+        guard previousIdleTimerSetting == nil else { return }
+        previousIdleTimerSetting = UIApplication.shared.isIdleTimerDisabled
+        UIApplication.shared.isIdleTimerDisabled = true
+    }
+
+    private func restoreIdleTimer() {
+        guard let previousIdleTimerSetting else { return }
+        UIApplication.shared.isIdleTimerDisabled = previousIdleTimerSetting
+        self.previousIdleTimerSetting = nil
     }
 }

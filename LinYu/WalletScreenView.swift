@@ -7,6 +7,7 @@ struct WalletScreenView: View {
     @ObservedObject private var widgets = WidgetBridge.shared
     @EnvironmentObject private var session: Session
     @Environment(\.appColors) private var colors
+    @Environment(\.openURL) private var openURL
 
     /// 账单/余额由容器层持有（对照 Android 的 MainViewModel），
     /// 页面切走再切回来不会重新请求
@@ -178,7 +179,9 @@ struct WalletScreenView: View {
                 Spacer()
                 // 拿到真实余额后「手动填写」就藏起来：估算值会被真实值覆盖，
                 // 摆在那儿只会让人以为填了能改数字
-                if canEstimate {
+                if showWalletBalance {
+                    alipayRechargeButton
+                } else if canEstimate {
                     Button {
                         // 预填**当前显示的余额**，不是上次填的初始值
                         editValue = displayBalance.map { MoneyFormat.format($0) }
@@ -208,6 +211,26 @@ struct WalletScreenView: View {
         .padding(24)
         .frame(maxWidth: .infinity, alignment: .leading)
         .linyuCard(colors)
+    }
+
+    private var alipayRechargeButton: some View {
+        Button {
+            guard let url = URL(string: "alipays://platformapi/startapp?appId=2018090661238647&page=pages%2Frecharge%2Frecharge") else { return }
+            openURL(url) { accepted in
+                guard !accepted else { return }
+                flow.toast = "无法打开小程序，请在支付宝搜索「趣智校园」"
+            }
+        } label: {
+            HStack(spacing: 3) {
+                Text("支付宝充值").font(.system(size: 13, weight: .semibold))
+                Image(systemName: "chevron.right").font(.system(size: 9, weight: .semibold))
+            }
+            .foregroundStyle(colors.accent)
+            .lineLimit(1)
+            .padding(.horizontal, 8)
+            .background(colors.accent.opacity(0.10), in: Capsule())
+        }
+        .buttonStyle(InstantButtonStyle())
     }
 
     // MARK: - 账单卡片

@@ -6,11 +6,13 @@ enum UserCardType: String, CaseIterable {
     case useCode
     case notify
     case trend
+    case keepScreenOn
     case background
     case boundRoom
     case update
     case about
     case log
+    case featureManagement
 
     var title: String {
         switch self {
@@ -18,52 +20,109 @@ enum UserCardType: String, CaseIterable {
         case .useCode: return "使用码"
         case .notify: return "通知"
         case .trend: return "消费趋势"
+        case .keepScreenOn: return "屏幕常亮"
         case .background: return "背景装扮"
         case .boundRoom: return "绑定寝室"
         case .update: return "软件更新"
         case .about: return "关于项目"
         case .log: return "运行日志"
+        case .featureManagement: return "功能管理"
         }
     }
 }
 
 /// 卡片分页策略 —— 逐条对照 Android 的 `UserCardLayoutPolicy`
 enum UserCardLayout {
+    struct Pages: Equatable {
+        var profile: [UserCardType]
+        var settings: [UserCardType]
+        var features: [UserCardType]
+    }
 
-    /// 「我的」页默认三张
+    enum Destination: Equatable {
+        case profile
+        case settings
+        case features
+    }
+
     static let profileDefaults: [UserCardType] = [.account, .useCode, .boundRoom]
-    /// 「设置」页默认六张
-    static let settingsDefaults: [UserCardType] = [.notify, .trend, .background, .log, .about, .update]
+    static let settingsDefaults: [UserCardType] = [.featureManagement, .about, .update]
+    static let featureDefaults: [UserCardType] = [.notify, .trend, .keepScreenOn, .background, .log]
 
-    // 两页一起恢复：卡片移到另一页后不能按各自默认列表过滤回原页。
-    // 与 Android restorePages 一致，去重后只补充尚未分配的卡片。
-    static func restorePages(profileSaved: String, settingsSaved: String)
-        -> (profile: [UserCardType], settings: [UserCardType]) {
-        func parse(_ saved: String) -> [UserCardType] {
-            saved.split(separator: ",").compactMap {
-                UserCardType(rawValue: $0.trimmingCharacters(in: .whitespacesAndNewlines))
+    /// 功能管理布局未保存时，保留旧设置卡片的相对顺序并归入功能管理。
+    /// 空字符串表示用户已把功能全部移出，恢复时继续使用空分组。
+    static func restorePages(profileSaved: String, settingsSaved: String, featuresSaved: String? = nil) -> Pages {
+        let group = UserCardType.featureManagement
+        var profile = unique(parse(profileSaved).filter { $0 != group })
+        let previousSettings = parse(settingsSaved).filter { !profile.contains($0) }
+        let features: [UserCardType]
+        if let featuresSaved {
+            features = unique(parse(featuresSaved).filter { featureDefaults.contains($0) && !profile.contains($0) })
+        } else {
+            var previousFeatures = previousSettings.filter { featureDefaults.contains($0) }
+            if let background = previousFeatures.firstIndex(of: .background), !previousFeatures.contains(.keepScreenOn) {
+                previousFeatures.insert(.keepScreenOn, at: background)
             }
+            features = unique(previousFeatures + featureDefaults).filter { !profile.contains($0) }
         }
-        var assigned = Set<UserCardType>()
-        var profile = parse(profileSaved).filter { assigned.insert($0).inserted }
-        var settings = parse(settingsSaved).filter { assigned.insert($0).inserted }
+        var settings = unique(previousSettings.compactMap { card in
+            if !features.contains(card) { return card }
+            return featuresSaved == nil ? group : nil
+        })
+        var assigned = Set(profile + settings + features)
         profile += profileDefaults.filter { assigned.insert($0).inserted }
         settings += settingsDefaults.filter { assigned.insert($0).inserted }
-        return (profile, settings)
+        settings += featureDefaults.filter { assigned.insert($0).inserted }
+        return Pages(profile: profile, settings: settings, features: features)
     }
 
-    static func save(_ list: [UserCardType], key: String) {
-        UserDefaults.standard.set(list.map(\.rawValue).joined(separator: ","), forKey: key)
+    static func move(_ type: UserCardType, to destination: Destination, in pages: Pages) -> Pages {
+        guard type != .featureManagement else { return pages }
+        if destination == .features, !featureDefaults.contains(type) { return pages }
+
+        var result = Pages(
+            profile: pages.profile.filter { $0 != type },
+            settings: pages.settings.filter { $0 != type },
+            features: pages.features.filter { $0 != type }
+        )
+        switch destination {
+        case .profile: result.profile.append(type)
+        case .settings: result.settings.append(type)
+        case .features: result.features.append(type)
+        }
+        return result
     }
 
-    static func moveToSettings(_ type: UserCardType, profile: [UserCardType], settings: [UserCardType])
-        -> (profile: [UserCardType], settings: [UserCardType]) {
-        (profile.filter { $0 != type }, settings.filter { $0 != type } + [type])
+    static func loadPages(defaults: UserDefaults = .standard) -> Pages {
+        if let saved = defaults.dictionary(forKey: "userCardPages") as? [String: String] {
+            return restorePages(profileSaved: saved["profile"] ?? "", settingsSaved: saved["settings"] ?? "",
+                                featuresSaved: saved["features"])
+        }
+        return restorePages(profileSaved: defaults.string(forKey: "userProfileCardOrder") ?? "",
+                            settingsSaved: defaults.string(forKey: "userSettingsCardOrder") ?? "")
     }
 
-    static func moveToProfile(_ type: UserCardType, profile: [UserCardType], settings: [UserCardType])
-        -> (profile: [UserCardType], settings: [UserCardType]) {
-        (profile.filter { $0 != type } + [type], settings.filter { $0 != type })
+    static func savePages(_ pages: Pages, defaults: UserDefaults = .standard) {
+        defaults.set([
+            "profile": serialize(pages.profile),
+            "settings": serialize(pages.settings),
+            "features": serialize(pages.features)
+        ], forKey: "userCardPages")
+    }
+
+    static func serialize(_ list: [UserCardType]) -> String {
+        list.map(\.rawValue).joined(separator: ",")
+    }
+
+    private static func parse(_ saved: String) -> [UserCardType] {
+        saved.split(separator: ",").compactMap {
+            UserCardType(rawValue: $0.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+    }
+
+    private static func unique(_ list: [UserCardType]) -> [UserCardType] {
+        var seen = Set<UserCardType>()
+        return list.filter { seen.insert($0).inserted }
     }
 
     static func saveHidden(_ set: Set<String>, key: String) {
@@ -75,11 +134,11 @@ enum UserCardLayout {
         return Set(raw.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty })
     }
 
-    static func move<T>(_ list: [T], from: Int, to: Int) -> [T] {
-        guard from != to, list.indices.contains(from), list.indices.contains(to) else { return list }
-        var m = list
-        let item = m.remove(at: from)
-        m.insert(item, at: to)
-        return m
+    static func swap(_ first: UserCardType, with second: UserCardType, in list: [UserCardType]) -> [UserCardType] {
+        guard let firstIndex = list.firstIndex(of: first), let secondIndex = list.firstIndex(of: second),
+              firstIndex != secondIndex else { return list }
+        var result = list
+        result.swapAt(firstIndex, secondIndex)
+        return result
     }
 }

@@ -16,8 +16,10 @@ enum SharedStoreSessionRegression {
         }
         ApiClient.getResponses["/account/useCode/new"] = #"{"success":true,"data":{"useCode":"123456","useCodeStatus":1}}"#
         let stale = AppDataStore(profileOwnerProvider: { owner })
+        check(stale.sessionIsCurrent, "本次登录的数据可发布到小组件")
         ApiClient.onGet = { _ in Session.shared.requestGeneration = UUID() }
         let loaded = await stale.loadUseCode()
+        check(!stale.sessionIsCurrent, "账号已重登时旧数据对象不能再发布小组件快照")
         check(!loaded && !stale.useCodeLoaded && stale.useCode == nil,
               "使用码响应期间同账号重登，旧结果不落内存")
         ApiClient.onGet = nil
@@ -36,6 +38,7 @@ enum SharedStoreSessionRegression {
 
         let current = AppDataStore(profileOwnerProvider: { owner })
         current.cancelRequestsIfSessionEnded()
+        check(current.sessionIsCurrent, "新登录可正常发布小组件快照")
         let currentLoaded = await current.loadUseCode()
         check(currentLoaded && current.useCode?.useCode == "123456", "暂时离开页面不销毁有效会话，仍正常加载使用码")
         ApiClient.onPost = { Session.shared.requestGeneration = UUID() }

@@ -25,11 +25,24 @@ struct PendingSettlement: Codable, Equatable {
     var projectId: String? = nil
     var accountId: String? = nil
     var authOwner: String? = nil
+
+    func isSameOrder(as other: Self) -> Bool {
+        guard snCode == other.snCode, projectId == other.projectId,
+              accountId == other.accountId, authOwner == other.authOwner else { return false }
+        if startedAt > 0, other.startedAt > 0 {
+            return startedAt == other.startedAt &&
+                (orderNo.isEmpty || other.orderNo.isEmpty || orderNo == other.orderNo)
+        }
+        return !orderNo.isEmpty && orderNo == other.orderNo
+    }
+
+    var consumptionTime: Double { Double(startedAt > 0 ? startedAt : createdAt) }
 }
 
 struct SettlementUpdate: Equatable {
-    let snCode: String
+    let order: PendingSettlement
     let amount: Double
+    var snCode: String { order.snCode }
 }
 
 struct SettlementReconciliation: Equatable {
@@ -55,17 +68,17 @@ enum PendingSettlementStore {
         UserDefaults.standard.set(data, forKey: key)
     }
 
-    /// 登记一条；同 snCode 的旧记录直接被替换（一台设备同时只可能有一单）
+    /// 同一设备的不同订单可以同时待对账。
     static func record(_ item: PendingSettlement) {
         lock.lock(); defer { lock.unlock() }
-        var items = all().filter { $0.snCode != item.snCode }
+        var items = all().filter { !$0.isSameOrder(as: item) }
         items.append(item)
         save(items)
     }
 
-    static func clear(snCode: String) {
+    static func clear(_ item: PendingSettlement) {
         lock.lock(); defer { lock.unlock() }
-        save(all().filter { $0.snCode != snCode })
+        save(all().filter { !$0.isSameOrder(as: item) })
     }
 
     static func clearAll() {
@@ -141,7 +154,7 @@ enum SettlementReconciler {
             if let i = available.firstIndex(where: { $0.id == matched.id }) {
                 available.remove(at: i)
             }
-            updates.append(SettlementUpdate(snCode: item.snCode, amount: amount))
+            updates.append(SettlementUpdate(order: item, amount: amount))
         }
 
         return SettlementReconciliation(updates: updates, remaining: remaining)

@@ -13,7 +13,7 @@ struct RootView: View {
     private var colors: AppColorSet { isDark ? .dark : .light }
 
     var body: some View {
-        Group {
+        ZStack {
             if session.isLoggedIn {
                 MainTabView()
                     .id(session.requestGeneration)
@@ -23,8 +23,7 @@ struct RootView: View {
                     .environmentObject(session)
             }
         }
-        // 被挤下线：用系统弹窗告知原因，关掉才真的回到登录页
-        // （对照 Android 的强制下线弹窗。不告知的话用户只会看到「莫名其妙退出了」）
+        // 弹窗挂在稳定的根容器，清理失效登录并切换页面时仍能显示。
         .alert(
             "登录已失效",
             isPresented: Binding(
@@ -32,7 +31,7 @@ struct RootView: View {
                 set: { if !$0 { _ = session.consumeKickReason() } }
             )
         ) {
-            Button("确定", role: .cancel) { _ = session.consumeKickReason() }
+            Button("重新登录") { _ = session.consumeKickReason() }
         } message: {
             Text("账户已在别处登录，请重新登陆。")
                 .multilineTextAlignment(.center)

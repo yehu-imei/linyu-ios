@@ -26,6 +26,8 @@ struct MainScreenView: View {
     @ObservedObject var store: AppDataStore
     /// 由 MainTabView 注入，用水页也在那一层切换
     @ObservedObject var flow: ShowerFlow
+    @Binding var editing: Bool
+    let roomPluginInstalled: Bool
     let onResumeOrder: () -> Void
 
     /// snCode → 台账
@@ -34,12 +36,12 @@ struct MainScreenView: View {
     @State private var detailDevice: DeviceInfo?
     @State private var deviceDetailTask: Task<Void, Never>?
     @State private var showQr = false
-    @State private var editing = false
     @State private var homeLayout = HomeDeviceLayout()
     @State private var layoutOwner = ""
 
     /// 寝室筛选条件（ViewModel 的等价物：改完要立刻刷新列表）
-    @AppStorage("boundRoom") private var boundRoom = ""
+    @AppStorage("boundRoom") private var storedRoom = ""
+    private var boundRoom: String { roomPluginInstalled ? storedRoom : "" }
     /// 下拉刷新中
     @State private var refreshing = false
 
@@ -90,8 +92,13 @@ struct MainScreenView: View {
         if editing { return homeLayout.sections }
         return homeLayout.sections.filter { section in
             !homeLayout.hidden.contains(section) && (section != .lastUsed ||
-                (flow.restoredOrders.isEmpty && !Prefs.lastDeviceSnCode.isEmpty))
+                (flow.restoredOrders.isEmpty && hasEligibleLastDevice))
         }
+    }
+
+    private var hasEligibleLastDevice: Bool {
+        let name = Prefs.lastDeviceRawName.isEmpty ? Prefs.lastDeviceName : Prefs.lastDeviceRawName
+        return !Prefs.lastDeviceSnCode.isEmpty && DeviceInfo.inSameRoom(boundKey: boundRoom, deviceName: name)
     }
 
     var body: some View {
@@ -302,7 +309,7 @@ struct MainScreenView: View {
     private func homeSectionContent(_ section: HomeDeviceSection, opacity: Double) -> some View {
         switch section {
         case .lastUsed:
-            if Prefs.lastDeviceSnCode.isEmpty {
+            if !hasEligibleLastDevice {
                 Text("暂无使用记录")
                     .font(.system(size: 13))
                     .foregroundStyle(colors.textSecondary)
@@ -367,7 +374,7 @@ struct MainScreenView: View {
                 cornerRadius: 14,
                 emojiSize: 22,
                 iconSize: 26,
-                background: DeviceGlyph.background(for: record.deviceEmoji, defaultColor: colors.accent)
+                background: DeviceGlyph.background(for: record.deviceEmoji)
             )
 
             VStack(alignment: .leading, spacing: 4) {
@@ -501,8 +508,7 @@ struct MainScreenView: View {
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(colors.accent)
             Button {
-                boundRoom = ""
-                Prefs.boundRoom = ""
+                RoomBindingPlugin.setRoom("")
                 flow.toast = "已取消寝室筛选"
             } label: {
                 Text("取消筛选")
@@ -708,7 +714,6 @@ struct MainScreenView: View {
         defer { refreshing = false }
 
         await store.reload()
-        boundRoom = Prefs.boundRoom
     }
 
     /// 查台账。结果存在 `AppDataStore` 里（跨页面保留），
@@ -808,6 +813,10 @@ struct MainScreenView: View {
             flow.toast = "没有上次使用的设备"
             return
         }
+        guard hasEligibleLastDevice else {
+            flow.toast = "请重新选择设备"
+            return
+        }
 
         let info: DeviceInfo
         if let cached = store.deviceInfos[sn] {
@@ -826,6 +835,12 @@ struct MainScreenView: View {
             }
         }
 
+        let currentRoom = RoomBindingPlugin.effectiveRoom
+        guard Prefs.lastDeviceSnCode == sn, info.snCode == sn,
+              DeviceInfo.inSameRoom(boundKey: currentRoom, deviceName: info.deviceName ?? "") else {
+            flow.toast = "请重新选择设备"
+            return
+        }
         if info.needsBluetoothControl || Prefs.isBleDevice(sn) {
             guard let p = scanner.peripheral(forSn: sn), let central = scanner.manager else {
                 flow.toast = "这台是蓝牙表，请从「附近设备」中选它（需要先扫描到）"

@@ -214,41 +214,6 @@ enum BillService {
         await fetch(WalletData.self, path: "/account/wallet", tag: "wallet")?.data
     }
 
-    /// 钱包接口的一次「探询」结果 —— 挤号心跳专用。
-    ///
-    /// ## 为什么不能用 `loadWallet()`
-    ///
-    /// `loadWallet()` 把失败吞成 `nil`，调用方**分不清**「没数据」和「登录失效」。
-    /// 而挤号检测恰恰只关心后者，所以这里必须把 `success` / `errorCode` / 文案都带出来
-    /// （对照 Android 的 `getWalletSafe`）。
-    struct WalletProbe {
-        let ok: Bool
-        let message: String?
-        let code: Int?
-        let wallet: WalletData?
-    }
-
-    static func probeWallet() async -> WalletProbe {
-        do {
-            let data = try await ApiClient.get("/account/wallet", tag: "walletHeartbeat")
-            let resp = try ApiClient.decodeShell(WalletData.self, from: data, path: "walletHeartbeat")
-            return WalletProbe(
-                ok: resp.success,
-                message: resp.displayMessage,
-                code: resp.errorCode,
-                wallet: resp.data
-            )
-        } catch let error as ApiError {
-            // 只有 HTTP 401/403 是确定的会话失效；其余（断网、超时、解析）不算挤号
-            if case let .unauthorized(status) = error {
-                return WalletProbe(ok: false, message: "登录已失效", code: status, wallet: nil)
-            }
-            return WalletProbe(ok: false, message: nil, code: nil, wallet: nil)
-        } catch {
-            return WalletProbe(ok: false, message: nil, code: nil, wallet: nil)
-        }
-    }
-
     static func loadCampusInfo() async -> CampusUserInfo? {
         await fetch(CampusUserInfo.self, path: "/settlement/campus/userInfo", tag: "campus")?.data
     }

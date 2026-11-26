@@ -138,9 +138,12 @@ final class AppNotifications: NSObject, ObservableObject, UNUserNotificationCent
         center.removePendingNotificationRequests(withIdentifiers: [id])
         center.removeDeliveredNotifications(withIdentifiers: [id])
     }
-    func finished(device: String, snCode: String, elapsed: Int, amount: Double?, automatic: Bool) {
+    func finished(order: PendingSettlement, amount: Double?, automatic: Bool) {
         // 使用中通知在确认关阀时撤销，不能等异步结算返回再删：同设备可能已开新单。
         guard Prefs.notifyEnabled, automatic ? Prefs.notifyAutoClose : Prefs.notifyFinished else { return }
+        let device = order.deviceName
+        let snCode = order.snCode
+        let elapsed = order.elapsedSec
         let name = device.count > 14 ? "…" + String(device.suffix(13)) : device
         let content = UNMutableNotificationContent()
         content.title = (automatic ? "设备已自动关停 · " : "使用结束 · ") + name
@@ -148,8 +151,8 @@ final class AppNotifications: NSObject, ObservableObject, UNUserNotificationCent
         content.userInfo["accountKey"] = Self.accountKey
         content.userInfo["automatic"] = automatic
         content.userInfo["kind"] = (automatic ? NotificationKind.autoClosed : .finished).rawValue
-        if let pending = PendingSettlementStore.all().first(where: { $0.snCode == snCode }) {
-            content.userInfo["pendingCreatedAt"] = String(pending.createdAt)
+        if PendingSettlementStore.all().contains(where: { $0.isSameOrder(as: order) }) {
+            content.userInfo["pendingCreatedAt"] = String(order.createdAt)
         }
         let duration = elapsed < 60 ? "\(elapsed)秒" : "\(elapsed / 60)分\(elapsed % 60)秒"
         content.body = "用时 \(duration) · " + (amount.map { $0 > 0 ? "消费 \(MoneyFormat.withSymbol($0))" : "无消费" } ?? "结算中")

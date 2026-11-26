@@ -15,6 +15,8 @@ struct WidgetDevice: Codable, Equatable, Identifiable {
     var selectable = true
     /// 只收录台账已确认属于此 SN 的地址，不能用猜测地址合并设备。
     var aliases: [String]? = nil
+    /// 保留楼层等信息，供 App 对缓存的附近设备重新应用寝室筛选。
+    var rawName: String? = nil
 }
 
 struct WidgetBill: Codable, Equatable {
@@ -67,6 +69,11 @@ struct WidgetSnapshot: Codable, Equatable {
 }
 
 enum WidgetDisplayPolicy {
+    static func readoutAction(staleBusy: Bool, running: Bool) -> WidgetCommandKind {
+        if staleBusy { return .refresh }
+        return running ? .stop : .bills
+    }
+
     // Android 按设备保存消费；没有本机记录时，只用明确匹配设备的账单补齐。
     static func lastConsume(cached: Double, device: WidgetDevice, bills: [WidgetBill]) -> Double {
         if cached > 0 { return cached }

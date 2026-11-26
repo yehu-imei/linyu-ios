@@ -1,12 +1,6 @@
 import SwiftUI
 
-/// 「我的账号」页 —— 逐条对照 Android 的 `UserScreen.kt`。
-///
-/// 和 Android 一样分两页：
-/// - **我的**：账号信息 / 使用码 / 绑定寝室
-/// - **设置**：通知 / 消费趋势 / 背景装扮 / 运行日志 / 关于 / 软件更新
-///
-/// 两页都支持「编辑」：上移、下移、隐藏、移到另一页。
+/// 「我的账号」与「设置」共用主界面的编辑状态。功能管理支持组内排序和移入移出。
 struct UserScreenView: View {
     @EnvironmentObject private var session: Session
     @Environment(\.appColors) private var colors
@@ -19,29 +13,30 @@ struct UserScreenView: View {
     @ObservedObject var scanner: BLEScanner
     /// 进设置页时底部导航栏要消失（Android 也是这么做的）
     @Binding var settingsVisible: Bool
+    @Binding var editMode: Bool
+    let roomPluginInstalled: Bool
+    let onOpenPluginManagement: () -> Void
 
     @AppStorage("linyu.darkMode") private var isDark = false
 
     @State private var showSettings = false
-    @State private var editMode = false
+    @State private var featuresExpanded = true
     /// 主题按钮在屏幕坐标里的位置（揭示动画的原点）
     @State private var themeAnchor: CGRect = .zero
 
-    @State private var profileOrder: [UserCardType]
-    @State private var settingsOrder: [UserCardType]
+    @State private var pages: UserCardLayout.Pages
     @State private var profileHidden: Set<String> = UserCardLayout.loadHidden("userProfileHiddenCards")
     @State private var settingsHidden: Set<String> = UserCardLayout.loadHidden("userSettingsHiddenCards")
 
-    init(flow: ShowerFlow, scanner: BLEScanner, settingsVisible: Binding<Bool>) {
+    init(flow: ShowerFlow, scanner: BLEScanner, settingsVisible: Binding<Bool>, editMode: Binding<Bool>,
+         roomPluginInstalled: Bool, onOpenPluginManagement: @escaping () -> Void) {
         self.flow = flow
         self.scanner = scanner
         _settingsVisible = settingsVisible
-        let pages = UserCardLayout.restorePages(
-            profileSaved: UserDefaults.standard.string(forKey: "userProfileCardOrder") ?? "",
-            settingsSaved: UserDefaults.standard.string(forKey: "userSettingsCardOrder") ?? ""
-        )
-        _profileOrder = State(initialValue: pages.profile)
-        _settingsOrder = State(initialValue: pages.settings)
+        _editMode = editMode
+        self.roomPluginInstalled = roomPluginInstalled
+        self.onOpenPluginManagement = onOpenPluginManagement
+        _pages = State(initialValue: UserCardLayout.loadPages())
     }
 
     private var versionText: String {
@@ -72,7 +67,6 @@ struct UserScreenView: View {
                 if presentation.page != nil { presentation.page = nil; return }
                 guard showSettings else { return }
                 showSettings = false
-                editMode = false
             }
         )
     }
@@ -86,14 +80,14 @@ struct UserScreenView: View {
                 header(showBack: false)
 
                 cardList(
-                    order: $profileOrder,
+                    order: $pages.profile,
                     hidden: $profileHidden,
-                    orderKey: "userProfileCardOrder",
                     hiddenKey: "userProfileHiddenCards",
-                    toOtherIcon: "arrow.right",
-                    toOtherHint: "移到设置页面"
+                    moveIcon: "arrow.right",
+                    moveHint: "移到设置页面",
+                    onMove: { moveAcrossPages($0, to: .settings) }
                 ) { type in
-                    moveToSettings(type)
+                    card(type)
                 }
 
                 Color.clear.frame(height: 100)
@@ -111,15 +105,22 @@ struct UserScreenView: View {
             VStack(alignment: .leading, spacing: 0) {
                 header(showBack: true)
 
+                if !visibleCards(in: pages.settings, hidden: settingsHidden).contains(.featureManagement) {
+                    pluginManagementEntry
+                }
+
                 cardList(
-                    order: $settingsOrder,
+                    order: $pages.settings,
                     hidden: $settingsHidden,
-                    orderKey: "userSettingsCardOrder",
                     hiddenKey: "userSettingsHiddenCards",
-                    toOtherIcon: "arrow.left",
-                    toOtherHint: "移到我的页面"
+                    moveIcon: "arrow.left",
+                    moveHint: "移到我的页面",
+                    onMove: { moveAcrossPages($0, to: .profile) },
+                    onMoveIntoFeatures: { moveCard($0, to: .features) },
+                    showPluginEntryAfterGroup: true
                 ) { type in
-                    moveToProfile(type)
+                    if type == .featureManagement { featureManagementCard }
+                    else { card(type) }
                 }
 
                 // 对照 Android `UserScreen.kt:409`：点击只是把事件往上抛，
@@ -158,7 +159,6 @@ struct UserScreenView: View {
             if showBack {
                 Button {
                     showSettings = false
-                    editMode = false
                 } label: {
                     Image(systemName: "chevron.left")
                         .font(.system(size: 17, weight: .semibold))
@@ -201,7 +201,6 @@ struct UserScreenView: View {
 
                 Button {
                     showSettings = true
-                    editMode = false
                 } label: {
                     Image(systemName: "gearshape")
                         .font(.system(size: 18, weight: .medium))
@@ -237,19 +236,26 @@ struct UserScreenView: View {
 
     // MARK: - 卡片列表
 
+    private func visibleCards(in order: [UserCardType], hidden: Set<String>) -> [UserCardType] {
+        order.filter {
+            (roomPluginInstalled || $0 != .boundRoom) && (editMode || !hidden.contains($0.rawValue))
+        }
+    }
+
     @ViewBuilder
-    private func cardList(
+    private func cardList<Content: View>(
         order: Binding<[UserCardType]>,
         hidden: Binding<Set<String>>,
-        orderKey: String,
         hiddenKey: String,
-        toOtherIcon: String,
-        toOtherHint: String,
-        onMoveToOther: @escaping (UserCardType) -> Void
+        moveIcon: String,
+        moveHint: String,
+        onMove: @escaping (UserCardType) -> Void,
+        onMoveIntoFeatures: ((UserCardType) -> Void)? = nil,
+        spacing: CGFloat = 16,
+        showPluginEntryAfterGroup: Bool = false,
+        @ViewBuilder content: @escaping (UserCardType) -> Content
     ) -> some View {
-        let visible = editMode
-            ? order.wrappedValue
-            : order.wrappedValue.filter { !hidden.wrappedValue.contains($0.rawValue) }
+        let visible = visibleCards(in: order.wrappedValue, hidden: hidden.wrappedValue)
 
         ForEach(Array(visible.enumerated()), id: \.element) { index, type in
             VStack(alignment: .leading, spacing: 4) {
@@ -262,18 +268,27 @@ struct UserScreenView: View {
                             ))
                             .frame(maxWidth: .infinity, alignment: .leading)
 
-                        editIcon(toOtherIcon, toOtherHint, colors.accent) {
-                            onMoveToOther(type)
+                        if type != .featureManagement {
+                            editIcon(moveIcon, moveHint, colors.accent) {
+                                onMove(type)
+                            }
+                        }
+                        if let onMoveIntoFeatures, UserCardLayout.featureDefaults.contains(type) {
+                            editIcon("plus", "移入功能管理", colors.accent) {
+                                onMoveIntoFeatures(type)
+                            }
                         }
                         editIcon("chevron.up", "上移", index > 0 ? colors.accent : colors.textSecondary.opacity(0.3), enabled: index > 0) {
-                            order.wrappedValue = UserCardLayout.move(order.wrappedValue, from: index, to: index - 1)
-                            UserCardLayout.save(order.wrappedValue, key: orderKey)
+                            guard index > 0 else { return }
+                            order.wrappedValue = UserCardLayout.swap(type, with: visible[index - 1], in: order.wrappedValue)
+                            UserCardLayout.savePages(pages)
                         }
                         editIcon("chevron.down", "下移",
                                  index < visible.count - 1 ? colors.accent : colors.textSecondary.opacity(0.3),
                                  enabled: index < visible.count - 1) {
-                            order.wrappedValue = UserCardLayout.move(order.wrappedValue, from: index, to: index + 1)
-                            UserCardLayout.save(order.wrappedValue, key: orderKey)
+                            guard index + 1 < visible.count else { return }
+                            order.wrappedValue = UserCardLayout.swap(type, with: visible[index + 1], in: order.wrappedValue)
+                            UserCardLayout.savePages(pages)
                         }
                         let isHidden = hidden.wrappedValue.contains(type.rawValue)
                         editIcon(
@@ -289,11 +304,77 @@ struct UserScreenView: View {
                     }
                 }
 
-                card(type)
+                content(type)
                     .opacity(editMode && hidden.wrappedValue.contains(type.rawValue) ? 0.45 : 1)
             }
-            .padding(.bottom, 16)
+            .padding(.bottom, spacing)
+
+            if showPluginEntryAfterGroup && type == .featureManagement {
+                pluginManagementEntry
+            }
         }
+    }
+
+    private var featureManagementCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Button {
+                featuresExpanded.toggle()
+            } label: {
+                HStack {
+                    Text("功能管理")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(colors.textPrimary)
+                    Spacer()
+                    if !editMode {
+                        Image(systemName: featuresExpanded ? "chevron.up" : "chevron.down")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(colors.textSecondary)
+                    }
+                }
+                .padding(8)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(InstantButtonStyle())
+            .disabled(editMode)
+            .accessibilityValue(featuresExpanded || editMode ? "已展开" : "已折叠")
+
+            if featuresExpanded || editMode {
+                if visibleCards(in: pages.features, hidden: settingsHidden).isEmpty && !editMode {
+                    Text("暂无显示的功能")
+                        .font(.system(size: 13))
+                        .foregroundStyle(colors.textSecondary)
+                        .padding(8)
+                }
+                cardList(order: $pages.features, hidden: $settingsHidden,
+                         hiddenKey: "userSettingsHiddenCards", moveIcon: "arrow.right",
+                         moveHint: "移出功能管理", onMove: { moveCard($0, to: .settings) },
+                         spacing: 0) { type in
+                    card(type)
+                }
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .linyuCard(colors)
+    }
+
+    private var pluginManagementEntry: some View {
+        Button(action: onOpenPluginManagement) {
+            BaseCard {
+                HStack {
+                    Text("插件管理")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(colors.textPrimary)
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(colors.accent)
+                }
+            }
+            .contentShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+        }
+        .buttonStyle(InstantButtonStyle())
+        .padding(.bottom, 16)
     }
 
     private func editIcon(
@@ -322,36 +403,27 @@ struct UserScreenView: View {
         case .useCode: UseCodeCardView()
         case .notify: NotifyCardView()
         case .trend: TrendToggleCardView()
+        case .keepScreenOn: KeepScreenOnCardView()
         case .background: BackgroundCardView()
         case .boundRoom: BoundRoomCardView(scanner: scanner, store: store)
         case .update: SoftwareUpdateCard()
         case .about: AboutCardView()
         case .log: LogCardView { presentation.page = .log }
+        case .featureManagement: EmptyView()
         }
     }
 
     // MARK: - 跨页移动
 
-    private func moveToSettings(_ type: UserCardType) {
-        let pages = UserCardLayout.moveToSettings(type, profile: profileOrder, settings: settingsOrder)
-        profileOrder = pages.profile
-        settingsOrder = pages.settings
-        profileHidden.remove(type.rawValue)
-        settingsHidden.remove(type.rawValue)
-        UserCardLayout.save(profileOrder, key: "userProfileCardOrder")
-        UserCardLayout.save(settingsOrder, key: "userSettingsCardOrder")
-        UserCardLayout.saveHidden(profileHidden, key: "userProfileHiddenCards")
-        UserCardLayout.saveHidden(settingsHidden, key: "userSettingsHiddenCards")
+    private func moveCard(_ type: UserCardType, to destination: UserCardLayout.Destination) {
+        pages = UserCardLayout.move(type, to: destination, in: pages)
+        UserCardLayout.savePages(pages)
     }
 
-    private func moveToProfile(_ type: UserCardType) {
-        let pages = UserCardLayout.moveToProfile(type, profile: profileOrder, settings: settingsOrder)
-        profileOrder = pages.profile
-        settingsOrder = pages.settings
+    private func moveAcrossPages(_ type: UserCardType, to destination: UserCardLayout.Destination) {
+        moveCard(type, to: destination)
         profileHidden.remove(type.rawValue)
         settingsHidden.remove(type.rawValue)
-        UserCardLayout.save(profileOrder, key: "userProfileCardOrder")
-        UserCardLayout.save(settingsOrder, key: "userSettingsCardOrder")
         UserCardLayout.saveHidden(profileHidden, key: "userProfileHiddenCards")
         UserCardLayout.saveHidden(settingsHidden, key: "userSettingsHiddenCards")
     }

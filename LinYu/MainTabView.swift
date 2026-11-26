@@ -30,6 +30,10 @@ struct MainTabView: View {
     @Environment(\.scenePhase) private var scenePhase
     /// 进「我的 → 设置」时隐藏底部导航（Android 也是这么做的）
     @State private var settingsVisible = false
+    @State private var editingCards = false
+    @State private var showPluginManagement = false
+    @State private var roomPlugin = RoomBindingPlugin.installed
+    @AppStorage("boundRoom") private var boundRoom = ""
     // 与水控状态同一生命周期，不能在视图重建/组件唤起时复位。
     private var showerMinimized: Bool {
         get { !flow.usePageVisible }
@@ -70,12 +74,15 @@ struct MainTabView: View {
                         switch tab {
                         case 0:
                             MainScreenView(scanner: scanner, store: store, flow: flow,
+                                            editing: $editingCards, roomPluginInstalled: roomPlugin != nil,
                                            onResumeOrder: { showerMinimized = false })
                                 .id(refreshToken)
                         case 1:
                             WalletScreenView(store: store, flow: flow, deduct: deduct)
                         default:
-                            UserScreenView(flow: flow, scanner: scanner, settingsVisible: $settingsVisible)
+                            UserScreenView(flow: flow, scanner: scanner, settingsVisible: $settingsVisible,
+                                           editMode: $editingCards, roomPluginInstalled: roomPlugin != nil,
+                                           onOpenPluginManagement: { showPluginManagement = true })
                         }
                     }
                     // ⚠️ `.id(tab)` 必不可少：SwiftUI 靠它把「换页」识别成
@@ -106,6 +113,28 @@ struct MainTabView: View {
         // 铺到屏幕最下沿：Android 是 edge-to-edge + 各页面只加 statusBarsPadding，
         // 底部一律不留白。放在这一层，页面内部就不会各自算一遍安全区。
         .ignoresSafeArea(.container, edges: .bottom)
+        .allowsHitTesting(!showPluginManagement)
+        .accessibilityHidden(showPluginManagement)
+        .overlay {
+            if showPluginManagement {
+                PluginManagementView(
+                    installed: roomPlugin,
+                    onInstall: { plugin in
+                        guard RoomBindingPlugin.install(plugin) else { return false }
+                        syncRoomPlugin()
+                        return true
+                    },
+                    onUninstall: {
+                        guard RoomBindingPlugin.uninstall() else { return false }
+                        syncRoomPlugin()
+                        return true
+                    },
+                    onDismiss: { showPluginManagement = false },
+                    onMessage: { flow.toast = $0 }
+                )
+                .transition(.identity)
+            }
+        }
         // ⚠️ 这里**不能**挂容器级 .animation：它会向下传播到所有子视图，
         // 于是「消费趋势折叠」被套上渐隐、「我的 → 编辑」里卡片上下移动被套上
         // 位移动画 —— 用户看到的就是「残影 / 平移」。
@@ -205,6 +234,9 @@ struct MainTabView: View {
         .onChange(of: scanner.isScanning) { scanning in
             if !scanning { widgets.sync(store: store, flow: flow, scanner: scanner, force: true) }
         }
+        .onChange(of: boundRoom) { _ in
+            widgets.sync(store: store, flow: flow, scanner: scanner, force: true)
+        }
         .onChange(of: notifications.settingsRevision) { _ in flow.refreshInUseNotifications() }
         .onChange(of: notifications.destinationTab) { target in
             consumeNotificationDestination()
@@ -246,6 +278,7 @@ struct MainTabView: View {
             widgets.sync(store: store, flow: flow, scanner: scanner, force: true)
             showerMinimized = false
             settingsVisible = false
+            showPluginManagement = false
             if flow.activeOrder == nil { tab = 0 }
         }
         .task(id: flow.toastRevision) {
@@ -255,6 +288,11 @@ struct MainTabView: View {
             guard !Task.isCancelled, flow.toastRevision == revision else { return }
             flow.toast = nil
         }
+    }
+
+    private func syncRoomPlugin() {
+        roomPlugin = RoomBindingPlugin.installed
+        widgets.sync(store: store, flow: flow, scanner: scanner, force: true)
     }
 
     @ViewBuilder private var toastLayer: some View {
@@ -271,6 +309,7 @@ struct MainTabView: View {
 
     private func consumeNotificationDestination() {
         guard let target = notifications.destinationTab else { return }
+        showPluginManagement = false
         showerMinimized = true
         settingsVisible = false
         tab = target
@@ -278,6 +317,7 @@ struct MainTabView: View {
     }
 
     @MainActor @discardableResult private func consumeWidgetNavigation() -> Bool {
+        guard store.sessionIsCurrent else { return false }
         guard let action = widgets.consumeNavigation() else { return false }
         guard !flow.controlBusy, !handlingWidget else {
             widgets.pendingDeviceSN = nil
@@ -286,6 +326,7 @@ struct MainTabView: View {
             return true
         }
         settingsVisible = false
+        showPluginManagement = false
         userPresentation.page = nil
         userPresentation.dialog = nil
         showerMinimized = true
@@ -295,6 +336,7 @@ struct MainTabView: View {
     }
 
     @MainActor private func processWidgetCommand() async {
+        guard store.sessionIsCurrent else { return }
         if consumeWidgetNavigation() { return }
         guard let request = widgets.command else { return }
         guard UIApplication.shared.applicationState == .active else {
@@ -309,6 +351,7 @@ struct MainTabView: View {
         defer { handlingWidget = false }
         // 先让操作目标与进度可见，再查台账/开关阀，不能等网络结束才退出设置或背景页。
         settingsVisible = false
+        showPluginManagement = false
         userPresentation.page = nil
         userPresentation.dialog = nil
         // 页面只在接收请求时选定。刷新完成不再次导航，避免覆盖用户随后开启的使用页。
@@ -318,6 +361,7 @@ struct MainTabView: View {
         flow.centralProvider = { [scanner] in scanner.manager }
         flow.deviceInfoProvider = { [store] sn in store.deviceInfos[sn] }
         _ = await widgets.process(store: store, flow: flow, scanner: scanner)
+        guard store.sessionIsCurrent else { return }
         if request.kind == .start, flow.activeOrder?.snCode == request.sn {
             flow.setUsePageVisible(true, reason: "组件开启完成")
         }
@@ -333,6 +377,7 @@ struct MainTabView: View {
             guard await flow.handleNotification(action) else { return }
             notifications.consume(action.id)
             if !action.stop, flow.activeOrder?.snCode == action.target.snCode {
+                showPluginManagement = false
                 showerMinimized = false
                 settingsVisible = false
             }

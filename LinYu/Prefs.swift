@@ -39,6 +39,14 @@ enum Prefs {
         get { d.string(forKey: "lastDeviceTypeName") ?? "" }
         set { d.set(newValue, forKey: "lastDeviceTypeName") }
     }
+    static var lastDeviceProjectId: String {
+        get { d.string(forKey: "lastDeviceProjectId") ?? "" }
+        set { d.set(newValue, forKey: "lastDeviceProjectId") }
+    }
+    static var lastDeviceProjectAccountId: String {
+        get { d.string(forKey: "lastDeviceProjectAccountId") ?? "" }
+        set { d.set(newValue, forKey: "lastDeviceProjectAccountId") }
+    }
     /// 预扣金额（元）。小组件／恢复订单拿不到 DeviceInfo 时靠它显示「预扣」
     static var lastDeviceWithholdMoney: Double {
         get { d.double(forKey: "lastDeviceWithholdMoney") }
@@ -164,7 +172,8 @@ enum Prefs {
     /// 记一笔消费。金额为 0 时不动已有记录，避免「本次无消费」把历史值抹掉。
     static func consumeRecordedAt(_ snCode: String) -> Double { d.double(forKey: "consume_time_\(snCode)") }
     static func recordConsume(_ snCode: String, amount: Double, atMs: Double = Date().timeIntervalSince1970 * 1000) {
-        guard amount > 0, !snCode.isEmpty else { return }
+        guard amount.isFinite, amount > 0, !snCode.isEmpty,
+              atMs.isFinite, atMs > 0, atMs >= consumeRecordedAt(snCode) else { return }
         d.set(amount, forKey: "consume_\(snCode)")
         d.set(atMs, forKey: "consume_time_\(snCode)")
         d.set(Date().timeIntervalSince1970 * 1000, forKey: "lastConsumeTime")

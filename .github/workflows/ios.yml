@@ -52,7 +52,8 @@ jobs:
             -o "$RUNNER_TEMP/linyu-data-tests"
           "$RUNNER_TEMP/linyu-data-tests"
           swiftc -swift-version 5 -parse-as-library \
-            LinYu/ApiModels.swift LinYu/ApiClient.swift LinYu/ProjectAuthContext.swift LinYu/LoginFeedback.swift LinYu/SessionWork.swift Tests/NetworkRegression.swift \
+            LinYu/ApiModels.swift LinYu/ApiClient.swift LinYu/ProjectAuthContext.swift LinYu/LoginFeedback.swift LinYu/SessionWork.swift \
+            LinYu/AuthService.swift LinYu/Signer.swift Tests/NetworkRegression.swift \
             -o "$RUNNER_TEMP/linyu-network-tests"
           "$RUNNER_TEMP/linyu-network-tests"
           swiftc -swift-version 5 -parse-as-library \
@@ -65,6 +66,10 @@ jobs:
           "$RUNNER_TEMP/linyu-widget-tests"
           swiftc -swift-version 5 -parse-as-library LinYu/UserReleaseNotes.swift Tests/ReleaseNotesRegression.swift -o "$RUNNER_TEMP/linyu-release-tests"
           "$RUNNER_TEMP/linyu-release-tests"
+          swiftc -swift-version 5 -parse-as-library \
+            LinYu/PluginRepository.swift LinYu/PluginZip.swift Tests/PluginRegression.swift \
+            -o "$RUNNER_TEMP/linyu-plugin-tests"
+          "$RUNNER_TEMP/linyu-plugin-tests"
 
       - name: 生成 Xcode 工程
         run: xcodegen generate

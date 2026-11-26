@@ -9,6 +9,16 @@ struct BleRecoveryRecord: Codable {
     let protocolType: String
     let randomNumber: String
     let consumeDate: String
+    var awaitingOpenConfirmation: Bool? = nil
+    var projectId: String? = nil
+    var accountId: String? = nil
+    var authOwner: String? = nil
+
+    func canConfirmOpen(project: ProjectAuthContext, serverOrderNo: String?) -> Bool {
+        awaitingOpenConfirmation == true && projectId == project.projectId &&
+            accountId == project.accountId && authOwner == project.owner &&
+            !orderNo.isEmpty && serverOrderNo == orderNo
+    }
 }
 enum BleRecoveryStore {
     private static let key = "bleSessionJson"
@@ -20,9 +30,12 @@ enum BleRecoveryStore {
                      defaults: UserDefaults = .standard) -> BleRecoveryRecord? {
         guard !owner.isEmpty, startedAt > 0 else { return nil }
         return all(defaults).first {
-            $0.owner == owner && $0.snCode == snCode && $0.startedAt == startedAt &&
+            $0.awaitingOpenConfirmation != true && $0.owner == owner && $0.snCode == snCode && $0.startedAt == startedAt &&
                 ($0.orderNo == orderNo || $0.orderNo.isEmpty || orderNo.isEmpty)
         }
+    }
+    static func candidate(owner: String, snCode: String, defaults: UserDefaults = .standard) -> BleRecoveryRecord? {
+        all(defaults).first { $0.owner == owner && $0.snCode == snCode && $0.awaitingOpenConfirmation == true }
     }
     static func save(_ value: BleRecoveryRecord, defaults: UserDefaults = .standard) {
         var values = all(defaults).filter { $0.owner == value.owner && $0.snCode != value.snCode }

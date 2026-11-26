@@ -36,6 +36,23 @@ enum ParityFinishRegression {
         BleRecoveryStore.remove(snCode: "sn", defaults: defaults)
         check(BleRecoveryStore.read(owner: "A", snCode: "sn", orderNo: "order", startedAt: 100, defaults: defaults) == nil, "结束后清除目标蓝牙恢复记录")
 
+        let project = ProjectAuthContext(projectId: "1", accountId: "2", owner: "current", generation: UUID())
+        var candidate = recovery
+        candidate.awaitingOpenConfirmation = true
+        candidate.projectId = project.projectId
+        candidate.accountId = project.accountId
+        candidate.authOwner = project.owner
+        BleRecoveryStore.save(candidate, defaults: defaults)
+        check(BleRecoveryStore.read(owner: "A", snCode: "sn", orderNo: "order", startedAt: 100, defaults: defaults) == nil,
+              "未确认的开阀候选不被恢复成活跃订单")
+        let saved = BleRecoveryStore.candidate(owner: "A", snCode: "sn", defaults: defaults)
+        check(saved?.canConfirmOpen(project: project, serverOrderNo: "order") == true,
+              "候选仅用服务器返回的本人确切订单号确认")
+        check(saved?.canConfirmOpen(project: project, serverOrderNo: "replacement") == false &&
+            saved?.canConfirmOpen(project: project, serverOrderNo: nil) == false, "未知或替换订单不确认开阀")
+        let other = ProjectAuthContext(projectId: "1", accountId: "3", owner: project.owner, generation: project.generation)
+        check(saved?.canConfirmOpen(project: other, serverOrderNo: "order") == false &&
+            BleRecoveryStore.candidate(owner: "B", snCode: "sn", defaults: defaults) == nil, "候选不能跨项目账户恢复")
         check(SettlementNoticePolicy.shouldCorrect(createdAt: 100, notificationCreatedAt: 100, now: 100 + 1_800_000), "30分钟内允许更正同一笔结算通知")
         check(!SettlementNoticePolicy.shouldCorrect(createdAt: 100, notificationCreatedAt: 101, now: 200), "不覆盖同设备后来的通知")
         check(!SettlementNoticePolicy.shouldCorrect(createdAt: 100, notificationCreatedAt: 100, now: 100 + 1_800_001), "超过窗口不再补通知")

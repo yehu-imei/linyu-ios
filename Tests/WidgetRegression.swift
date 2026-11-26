@@ -8,6 +8,13 @@ import Foundation
             if !passed { failures += 1 }
         }
         var snapshot = WidgetSnapshot()
+        check(WidgetDisplayPolicy.readoutAction(staleBusy: true, running: true) == .refresh,
+              "状态未知的使用中卡片只刷新")
+        check(WidgetDisplayPolicy.readoutAction(staleBusy: true, running: false) == .refresh,
+              "状态未知的空闲卡片只刷新")
+        check(WidgetDisplayPolicy.readoutAction(staleBusy: false, running: true) == .stop &&
+              WidgetDisplayPolicy.readoutAction(staleBusy: false, running: false) == .bills,
+              "正常组件仍能关闭用水或打开账单")
         check(snapshot.emptyTitle == "未登录", "无账户且没有同步错误才显示未登录")
         snapshot.message = "小组件无法同步，请检查安装权限"
         check(snapshot.emptyTitle == "等待同步", "共享权限错误不误报退出登录")
@@ -44,6 +51,13 @@ import Foundation
         check(WidgetCommand(url: URL(string: "https://start")!) == nil, "非组件链接拒绝执行")
         let encoded = try JSONEncoder().encode(snapshot)
         check(try JSONDecoder().decode(WidgetSnapshot.self, from: encoded) == snapshot, "快照序列化完整保留设备与订单")
+        let legacy = try JSONDecoder().decode(WidgetSnapshot.self, from: encoded)
+        check(legacy.devices.allSatisfy { $0.rawName == nil }, "已安装旧版本的小组件快照允许缺少原始设备名")
+        var namedSnapshot = snapshot
+        namedSnapshot.devices[0].rawName = "龙川北苑-3号楼-3层-320"
+        let named = try JSONDecoder().decode(WidgetSnapshot.self, from: JSONEncoder().encode(namedSnapshot))
+        check(named.devices[0].rawName == namedSnapshot.devices[0].rawName &&
+              named.controlIdentity == snapshot.controlIdentity, "原始设备名保留楼层信息且不单独改变控制身份")
         let before = snapshot.controlIdentity
         snapshot.balance = "¥ 5.00"
         snapshot.devices[0].rssi = -65

@@ -214,87 +214,46 @@ struct UseCodeCardView: View {
 
 // MARK: - 通知设置
 
-/// 通知设置卡片 —— 逐条对照 Android `UserSettingsCards.NotifyCard`。
 struct NotifyCardView: View {
     @Environment(\.appColors) private var colors
     @Environment(\.openURL) private var openURL
     @Environment(\.scenePhase) private var scenePhase
-    @ObservedObject private var notifications = AppNotifications.shared
+    private let notifications = AppNotifications.shared
 
     @State private var enabled = Prefs.notifyEnabled
-    @State private var expanded = false
-    @State private var inUse = Prefs.notifyInUse
-    @State private var finished = Prefs.notifyFinished
-    @State private var autoClose = Prefs.notifyAutoClose
-    @State private var alert = Prefs.notifyAlert
 
     var body: some View {
         BaseCard {
-            VStack(alignment: .leading, spacing: 0) {
-                // ── 总开关 ──
-                //
-                // ⚠️ 布局是「文字靠左、开关靠右」（Android 的 SpaceBetween）。
-                // 之前两边一起居中，开关会跟着文字宽度飘，看着不像设置项。
-                HStack(alignment: .center) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("通知")
-                            .font(.system(size: 16, weight: .semibold))
-                            .foregroundStyle(colors.textPrimary)
-                        Text(enabled ? "用水期间和结束时收到系统提醒" : "已关闭全部通知")
-                            .font(.system(size: 13))
-                            .foregroundStyle(colors.textSecondary)
-                    }
-                    Spacer(minLength: 12)
-                    Toggle("", isOn: $enabled)
-                        .labelsHidden()
-                        .tint(colors.accent)
-                        .onChange(of: enabled) { value in
-                            Prefs.notifyEnabled = value
-                            if value {
-                                Task {
-                                    _ = await notifications.requestPermission()
-                                    notifications.settingsChanged()
-                                }
-                            } else { notifications.settingsChanged() }
-                        }
-                }
-
-                if enabled {
-                    if let error = notifications.authorizationError {
-                        Text(error).font(.system(size: 12)).foregroundStyle(colors.danger).padding(.top, 10)
-                    }
-                    if notifications.permissionDenied || notifications.authorizationError != nil {
-                        Button("前往系统设置开启通知") {
-                            if let url = URL(string: UIApplication.openSettingsURLString) { openURL(url) }
-                        }.font(.system(size: 13)).foregroundStyle(colors.accent).padding(.top, 10)
-                    }
-                    // ── 展开入口 ──
-                    Button {
-                        expanded.toggle()
-                    } label: {
-                        HStack {
-                            Text("详细设置")
-                                .font(.system(size: 13))
-                                .foregroundStyle(colors.accent)
-                            Spacer()
-                            Image(systemName: expanded ? "chevron.up" : "chevron.down")
-                                .font(.system(size: 12, weight: .semibold))
-                                .foregroundStyle(colors.accent)
-                        }
-                        .padding(.vertical, 8)
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(InstantButtonStyle())
-                    .padding(.top, 10)
-
-                    if expanded {
-                        // 文案逐条照搬 Android 的 NotifyRow（标题 + 说明 + 开关靠右）
-                        notifyRow("用水状态通知", "使用期间在通知栏显示设备", $inUse) { Prefs.notifyInUse = $0; notifications.settingsChanged() }
-                        notifyRow("使用结束通知", "停止后显示用时和消费金额", $finished) { Prefs.notifyFinished = $0; notifications.settingsChanged() }
-                        notifyRow("自动关停提醒", "设备超时自己关闭时提醒", $autoClose) { Prefs.notifyAutoClose = $0; notifications.settingsChanged() }
-                        notifyRow("横幅提醒", "开阀失败、设备被占用时从屏幕顶部弹出", $alert) { Prefs.notifyAlert = $0; notifications.settingsChanged() }
+            HStack(alignment: .center) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("通知")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(colors.textPrimary)
+                    if enabled {
+                        Button("通知已开启，点击跳转详细设置", action: openNotificationSettings)
+                            .buttonStyle(InstantButtonStyle())
+                    } else {
+                        Text("用水通知已关闭")
                     }
                 }
+                .font(.system(size: 13))
+                .foregroundStyle(colors.textSecondary)
+
+                Spacer(minLength: 12)
+                Toggle("通知", isOn: $enabled)
+                    .labelsHidden()
+                    .tint(colors.accent)
+                    .onChange(of: enabled) { value in
+                        Prefs.notifyEnabled = value
+                        if value {
+                            Task {
+                                _ = await notifications.requestPermission()
+                                notifications.settingsChanged()
+                            }
+                        } else {
+                            notifications.settingsChanged()
+                        }
+                    }
             }
         }
         .task { await notifications.refreshAuthorization() }
@@ -303,29 +262,13 @@ struct NotifyCardView: View {
         }
     }
 
-    /// 一条细分开关：**标题 + 说明在左，开关固定在右**
-    private func notifyRow(
-        _ title: String,
-        _ desc: String,
-        _ value: Binding<Bool>,
-        onChange: @escaping (Bool) -> Void
-    ) -> some View {
-        HStack(alignment: .center) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .font(.system(size: 14))
-                    .foregroundStyle(colors.textPrimary)
-                Text(desc)
-                    .font(.system(size: 11))
-                    .foregroundStyle(colors.textSecondary)
+    private func openNotificationSettings() {
+        guard let url = URL(string: UIApplication.openNotificationSettingsURLString) else { return }
+        openURL(url) { accepted in
+            if !accepted, let fallback = URL(string: UIApplication.openSettingsURLString) {
+                openURL(fallback)
             }
-            Spacer(minLength: 12)
-            Toggle("", isOn: value)
-                .labelsHidden()
-                .tint(colors.accent)
-                .onChange(of: value.wrappedValue) { v in onChange(v) }
         }
-        .padding(.vertical, 6)
     }
 }
 
@@ -351,6 +294,32 @@ struct TrendToggleCardView: View {
                     .labelsHidden()
                     .tint(colors.accent)
                     .onChange(of: enabled) { v in Prefs.trendEnabled = v }
+            }
+        }
+    }
+}
+
+// MARK: - 屏幕常亮
+
+struct KeepScreenOnCardView: View {
+    @Environment(\.appColors) private var colors
+    @AppStorage("keepScreenOnDuringUse") private var enabled = true
+
+    var body: some View {
+        BaseCard {
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("屏幕常亮")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(colors.textPrimary)
+                    Text("使用设备时保持屏幕亮起")
+                        .font(.system(size: 13))
+                        .foregroundStyle(colors.textSecondary)
+                }
+                Spacer(minLength: 12)
+                Toggle("屏幕常亮", isOn: $enabled)
+                    .labelsHidden()
+                    .tint(colors.accent)
             }
         }
     }
@@ -426,8 +395,7 @@ struct BoundRoomCardView: View {
                             .lineLimit(1)
                         Spacer(minLength: 8)
                         Button {
-                            Prefs.boundRoom = ""
-                            boundRoom = ""
+                            RoomBindingPlugin.setRoom("")
                         } label: {
                             Text("取消绑定")
                                 .font(.system(size: 12))

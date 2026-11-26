@@ -68,7 +68,11 @@ struct UserDialogs: View {
                             VStack(spacing: 0) {
                                 ForEach(rooms, id: \.self) { key in
                                     Button {
-                                        Prefs.boundRoom = key
+                                        guard RoomBindingPlugin.installed != nil else {
+                                            presentation.dialog = nil
+                                            return
+                                        }
+                                        RoomBindingPlugin.setRoom(key)
                                         presentation.dialog = nil
                                         onRoomSelected(key)
                                     } label: {

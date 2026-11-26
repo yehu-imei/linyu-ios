@@ -64,7 +64,9 @@ struct UseCodeRedeemView: View {
                                             Image(systemName: "arrow.clockwise").font(.system(size: 18))
                                             Text(busy && !claiming ? "换码中" : (candidate.isEmpty ? "获取" : "换一个"))
                                                 .font(.system(size: 13))
+                                                .lineLimit(1)
                                         }.foregroundStyle(colors.accent).frame(minHeight: 44)
+                                            .fixedSize(horizontal: true, vertical: false)
                                     }.disabled(busy || store.useCodeQuotaExhausted)
                                 }
                                 if !candidate.isEmpty {

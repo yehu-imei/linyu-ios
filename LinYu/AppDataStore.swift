@@ -65,7 +65,7 @@ final class AppDataStore: ObservableObject {
     var onBillsLoaded: (([BillDTO]) -> Void)?
     private let generation = Session.shared.requestGeneration
     private var requestsCancelled = false
-    private var sessionIsCurrent: Bool {
+    var sessionIsCurrent: Bool {
         !requestsCancelled && SessionWork.isCurrent(generation) && currentProfileOwner() == profileOwner
     }
     private let profileOwner: String
