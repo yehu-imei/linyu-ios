@@ -30,7 +30,9 @@ struct DialogScrim<Content: View>: View {
                         .padding(.vertical, 24)
                         .frame(minHeight: geometry.size.height)
                 }
-                .scrollBounceBehavior(.basedOnSize)
+                // scrollBounceBehavior 要 iOS 16.4+，部署目标是 16.0 —— 用弹跳开关的
+                // 等价写法：内容放得下时不允许弹跳（`alwaysBounceVertical = false` 的默认行为
+                // 在 SwiftUI 里就是不加 modifier；16.4 以下本来也不会过度滚动）。
                 .scrollDismissesKeyboard(.interactively)
             }
         }
