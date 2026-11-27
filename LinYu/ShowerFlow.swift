@@ -766,15 +766,20 @@ final class ShowerFlow: ObservableObject {
         let r = await CloudShower.close(snCode: order.snCode, orderNo: orderNo, project: project)
         guard workScope.isCurrent else { return }
         switch r {
-        case .closed:
+        case .closed, .replaced:
             if settledOrder.orderNo.isEmpty {
                 settledOrder.orderNo = ActiveOrderStore.find(order.snCode)?.orderNo ?? ""
             }
             let pending = recordClosedOrder(settledOrder, elapsed: elapsed)
             // 已留恢复记录，退出使用页后可继续异步结算。
             activeOrder = nil
-            toast = "热水器已关闭"
-            Task { await workScope.run(fallback: ()) { await self.settleCloud(pending, project: project, automatic: automatic) } }
+            let replacementOwner = r.replacingOrderOwner
+            if let replacementOwner { deviceOwner[order.snCode] = replacementOwner }
+            toast = replacementOwner == nil ? "热水器已关闭" : "本次用水已结束"
+            Task { await workScope.run(fallback: ()) {
+                await self.settleCloud(pending, project: project, automatic: automatic && replacementOwner == nil,
+                                       deviceStillOccupied: replacementOwner != nil)
+            } }
         case .unconfirmed:
             // 没有证据 = 水可能还在流。留在页面让用户重试
             AppNotifications.shared.closeProblem(device: order.device.displayName, snCode: order.snCode)
@@ -1053,11 +1058,12 @@ final class ShowerFlow: ObservableObject {
     }
 
     private func settleCloud(_ order: PendingSettlement, project: ProjectAuthContext,
-                             automatic: Bool, showAutoClose: Bool = true) async {
+                             automatic: Bool, showAutoClose: Bool = true, deviceStillOccupied: Bool = false) async {
         guard workScope.isCurrent else { return }
         let yuan = await SettlementEngine.settleAmount(order, project: project)
         guard workScope.isCurrent else { return }
-        finishWithAmount(yuan, order: order, automatic: automatic, showAutoClose: showAutoClose)
+        finishWithAmount(yuan, order: order, automatic: automatic, showAutoClose: showAutoClose,
+                         deviceStillOccupied: deviceStillOccupied)
     }
 
     /// 处理 MQTT 推送 —— 逐条对照 Android `handleMqttMessage`。
@@ -1111,7 +1117,7 @@ final class ShowerFlow: ObservableObject {
 
     /// 结算完成：记金额、弹提示（或自动关停弹窗）
     private func finishWithAmount(_ amount: Double?, order: PendingSettlement,
-                                  automatic: Bool, showAutoClose: Bool = true) {
+                                  automatic: Bool, showAutoClose: Bool = true, deviceStillOccupied: Bool = false) {
         guard workScope.isCurrent else { return }
         settlementRevision += 1
         guard latestClosedOrders[order.snCode]?.isSameOrder(as: order) == true,
@@ -1135,10 +1141,10 @@ final class ShowerFlow: ObservableObject {
         if let yuan {
             toast = yuan > 0
                 ? "已停止，本次消费 \(MoneyFormat.withSymbol(yuan))"
-                : "热水器已关闭，本次无消费"
+                : "\(deviceStillOccupied ? "本次用水已结束" : "热水器已关闭")，本次无消费"
         } else {
             // nil = 还不知道，不是没花钱
-            toast = "已关闭，金额请稍后查看账单"
+            toast = "\(deviceStillOccupied ? "本次用水已结束" : "已关闭")，金额请稍后查看账单"
         }
     }
 
@@ -1246,18 +1252,26 @@ final class ShowerFlow: ObservableObject {
         // 云端表：问一次服务端还在不在用水（蓝牙表不能这么问，得连着）
         if order.channel == .cloud, let project = order.project {
             let revision = deviceRevisions[order.snCode, default: 0]
-            let running = await CloudShower.orderRunning(snCode: order.snCode, project: project)
+            let expected = order.orderNo.isEmpty ? ActiveOrderStore.find(order.snCode)?.orderNo ?? "" : order.orderNo
+            let status = await CloudShower.orderPresence(snCode: order.snCode, orderNo: expected, project: project)
             guard workScope.isCurrent else { return }
             guard !controlGate.isBusy, activeOrder?.snCode == order.snCode,
                   deviceRevisions[order.snCode, default: 0] == revision else { return }
-            if running == false {
-                AppLog.shared.i("回前台对齐：服务端已无订单，退出使用页")
+            if let ended = status.ended {
+                AppLog.shared.i("回前台对齐：原订单已结束，退出使用页")
                 let elapsed = order.elapsedSeconds
-                let pending = recordClosedOrder(order, elapsed: elapsed)
+                var endedOrder = order
+                endedOrder.orderNo = expected
+                let pending = recordClosedOrder(endedOrder, elapsed: elapsed)
                 activeOrder = nil
                 stopTimer()
-                toast = "设备已关闭"
-                Task { await workScope.run(fallback: ()) { await self.settleCloud(pending, project: project, automatic: true) } }
+                let replacementOwner = ended.replacingOrderOwner
+                if let replacementOwner { deviceOwner[order.snCode] = replacementOwner }
+                toast = replacementOwner == nil ? "设备已关闭" : "本次用水已结束"
+                Task { await workScope.run(fallback: ()) {
+                    await self.settleCloud(pending, project: project, automatic: replacementOwner == nil,
+                                           deviceStillOccupied: replacementOwner != nil)
+                } }
             }
         }
     }
@@ -1474,15 +1488,18 @@ final class ShowerFlow: ObservableObject {
         let outcome = await CloudShower.close(snCode: target.snCode, orderNo: orderNo, project: project)
         guard workScope.isCurrent else { return true }
         switch outcome {
-        case .closed:
+        case .closed, .replaced:
             let resolved = orderNo.isEmpty ? ActiveOrderStore.find(target.snCode)?.orderNo ?? "" : orderNo
             let pending = recordClosedOrder(snCode: target.snCode, orderNo: resolved, startedAt: target.startedAt,
                 deviceName: record.deviceName, elapsed: elapsed, project: project)
             markFinished(target.snCode)
-            toast = "热水器已关闭"
+            let replacementOwner = outcome.replacingOrderOwner
+            if let replacementOwner { deviceOwner[target.snCode] = replacementOwner }
+            toast = replacementOwner == nil ? "热水器已关闭" : "本次用水已结束"
             Task {
                 await workScope.run(fallback: ()) { [self] in
-                    await settleCloud(pending, project: project, automatic: false)
+                    await settleCloud(pending, project: project, automatic: false,
+                                      deviceStillOccupied: replacementOwner != nil)
                 }
             }
         case let .failed(message):
@@ -1586,24 +1603,17 @@ final class ShowerFlow: ObservableObject {
                                                                         device: cachedDevice(snCode)),
                   workScope.isCurrent else { continue }
 
-            switch await CloudShower.orderRunning(snCode: snCode, project: project) {
-            case .some(true):
-                continue
-            case .some(false):
-                if controlGate.isBusy { continue }
-                guard workScope.isCurrent, watchTokens[snCode] == token,
-                      ActiveOrderStore.find(snCode) == watched,
-                      Prefs.startedAt(snCode) == watchedStart else { continue }
-                await finishExternally(snCode, project: project)
-                return
-            case .none:
-                continue      // 请求失败 = 不确定，下轮再说（绝不臆断成已结束）
-            }
+            let status = await CloudShower.orderPresence(snCode: snCode, orderNo: watched.orderNo, project: project)
+            guard let ended = status.ended, !controlGate.isBusy, workScope.isCurrent,
+                  watchTokens[snCode] == token, ActiveOrderStore.find(snCode) == watched,
+                  Prefs.startedAt(snCode) == watchedStart else { continue }
+            await finishExternally(snCode, project: project, replacingOrderOwner: ended.replacingOrderOwner)
+            return
         }
     }
 
     /// 检测到用水在别处结束：清本地状态 → 通知 → 补结算
-    private func finishExternally(_ snCode: String, project: ProjectAuthContext) async {
+    private func finishExternally(_ snCode: String, project: ProjectAuthContext, replacingOrderOwner: Bool?) async {
         guard workScope.isCurrent else { return }
         guard let record = ActiveOrderStore.find(snCode) else { return }
         let startedAt = Prefs.startedAt(snCode)
@@ -1627,11 +1637,14 @@ final class ShowerFlow: ObservableObject {
         if wasDisplayed {
             activeOrder = nil
             stopTimer()
+            if replacingOrderOwner != nil { toast = "本次用水已结束" }
         }
+        if let replacingOrderOwner { deviceOwner[snCode] = replacingOrderOwner }
 
         // 「结算中」先挂上，拿到金额后原地更新（对照 Notifier.showSettling → 更新）
-        AppNotifications.shared.finished(order: pending, amount: nil, automatic: true)
-        await settleCloud(pending, project: project, automatic: true, showAutoClose: wasDisplayed)
+        AppNotifications.shared.finished(order: pending, amount: nil, automatic: replacingOrderOwner == nil)
+        await settleCloud(pending, project: project, automatic: replacingOrderOwner == nil, showAutoClose: wasDisplayed,
+                          deviceStillOccupied: replacingOrderOwner != nil)
     }
 
     // MARK: - 设备占用状态

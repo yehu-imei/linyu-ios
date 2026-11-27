@@ -133,11 +133,32 @@ enum CloudShower {
 
     // MARK: - 关阀
 
-    enum CloseOutcome {
+    enum CloseOutcome: Sendable {
         case closed
+        case replaced(ownedByCurrentAccount: Bool)
         case failed(String)
         /// 请求有没有发出去都不确定 —— 不能当成功，也不能当失败
         case unconfirmed(String)
+
+        var replacingOrderOwner: Bool? {
+            if case let .replaced(owner) = self { return owner }
+            return nil
+        }
+    }
+
+    enum OrderPresence: Sendable {
+        case original(String)
+        case idle
+        case differentOrder(ownedByCurrentAccount: Bool)
+        case unknown
+
+        var ended: CloseOutcome? {
+            switch self {
+            case .idle: return .closed
+            case .differentOrder(let owner): return .replaced(ownedByCurrentAccount: owner)
+            case .original, .unknown: return nil
+            }
+        }
     }
 
     static func close(snCode: String, orderNo: String, project: ProjectAuthContext? = nil,
@@ -148,19 +169,12 @@ enum CloudShower {
         guard SessionWork.isCurrent(generation) else { return .unconfirmed("登录状态已变化") }
         guard !snCode.isEmpty else { return .failed("设备信息不完整") }
 
-        // orderNo 必须**在关阀之前**敲定：关阀成功后订单就没了，queryUsing 再也问不出来
-        var no = orderNo
-        if no.isEmpty {
-            guard let using = try? await queryUsing(snCode: snCode, project: project) else {
-                return .unconfirmed("当前订单未确认，请稍后重试")
-            }
-            if using.deviceInUse == false { return .closed }
-            guard let owned = using.ownedOrderNo(snCode: snCode) else {
-                return .unconfirmed("当前订单未确认，请稍后重试")
-            }
-            no = owned
-            ActiveOrderStore.updateOrderNo(snCode: snCode, orderNo: owned)
-        }
+        // 只对同一设备当前仍归本账户的原订单发送关阀。已有本地号也不能跳过核对。
+        let initial = await orderPresence(snCode: snCode, orderNo: orderNo, project: project)
+        guard SessionWork.isCurrent(generation) else { return .unconfirmed("登录状态已变化") }
+        if let ended = initial.ended { return ended }
+        guard case let .original(no) = initial else { return .unconfirmed("当前订单未确认，请稍后重试") }
+        if orderNo.isEmpty { ActiveOrderStore.updateOrderNo(snCode: snCode, orderNo: no) }
 
         let resp: APIResponse<EmptyData>
         guard SessionWork.isCurrent(generation) else { return .unconfirmed("登录状态已变化") }
@@ -175,7 +189,9 @@ enum CloudShower {
         } catch {
             // 请求本身失败 → 没有任何证据。再问一次服务端还开着没有
             guard SessionWork.isCurrent(generation) else { return .unconfirmed("登录状态已变化") }
-            if await orderRunning(snCode: snCode, project: project) == false { return .closed }
+            let status = await orderPresence(snCode: snCode, orderNo: no, project: project)
+            guard SessionWork.isCurrent(generation) else { return .unconfirmed("登录状态已变化") }
+            if let ended = status.ended { return ended }
             return .unconfirmed("关闭结果未确认，设备可能仍在出水")
         }
 
@@ -183,30 +199,30 @@ enum CloudShower {
             return .failed(resp.displayMessage ?? "关闭失败，请重试")
         }
 
-        // 关阀受理后设备可能晚几秒才回报空闲。保持正在关闭，只读状态，不重发指令。
-        let confirmed = await withTaskGroup(of: Bool.self) { group in
+        // 关阀受理后只复核原订单。设备已被别的订单使用时无需等它也空闲。
+        let confirmed = await withTaskGroup(of: CloseOutcome?.self) { group in
             group.addTask {
                 for attempt in 0...8 {
                     if attempt > 0 {
-                        do { try await confirmationPause() } catch { return false }
+                        do { try await confirmationPause() } catch { return nil }
                     }
-                    guard SessionWork.isCurrent(generation) else { return false }
-                    let running = await orderRunning(snCode: snCode, project: project)
-                    guard SessionWork.isCurrent(generation) else { return false }
-                    if running == false { return true }
+                    guard SessionWork.isCurrent(generation) else { return nil }
+                    let status = await orderPresence(snCode: snCode, orderNo: no, project: project)
+                    guard SessionWork.isCurrent(generation) else { return nil }
+                    if let ended = status.ended { return ended }
                 }
-                return false
+                return nil
             }
             group.addTask {
                 try? await Task.sleep(nanoseconds: 9_000_000_000)
-                return false
+                return nil
             }
-            let result = await group.next() ?? false
+            let result = await group.next() ?? nil
             group.cancelAll()
             return result
         }
-        if confirmed { return .closed }
         guard SessionWork.isCurrent(generation) else { return .unconfirmed("登录状态已变化") }
+        if let confirmed { return confirmed }
         return .unconfirmed("关闭结果未确认，设备可能仍在出水")
     }
 
@@ -261,9 +277,16 @@ enum CloudShower {
         return response?.ownedOrderNo(snCode: snCode) ?? ""
     }
 
-    static func orderRunning(snCode: String, project: ProjectAuthContext? = nil) async -> Bool? {
-        let response = try? await queryUsing(snCode: snCode, project: project)
-        return response?.deviceInUse
+    static func orderPresence(snCode: String, orderNo: String, project: ProjectAuthContext? = nil) async -> OrderPresence {
+        guard let response = try? await queryUsing(snCode: snCode, project: project),
+              let occupied = response.deviceInUse else { return .unknown }
+        if let responseSN = response.data?.snCode, !responseSN.isEmpty,
+           responseSN.caseInsensitiveCompare(snCode) != .orderedSame { return .unknown }
+        if !occupied { return .idle }
+        if response.data?.isOwner == false { return .differentOrder(ownedByCurrentAccount: false) }
+        guard let active = response.ownedOrderNo(snCode: snCode) else { return .unknown }
+        if !orderNo.isEmpty && active != orderNo { return .differentOrder(ownedByCurrentAccount: true) }
+        return .original(active)
     }
 }
 

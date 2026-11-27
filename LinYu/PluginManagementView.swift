@@ -482,6 +482,7 @@ struct PluginManagementView: View {
             .foregroundStyle(colors.textPrimary)
             .lineSpacing(4)
             .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
         return DialogScrim(onTapOutside: { detailPlugin = nil }) {
             AlertCard(title: plugin.name, titleAlign: .leading,
                       contentSpacing: 10, actionSpacing: 0, cardPadding: 22) {
@@ -489,11 +490,14 @@ struct PluginManagementView: View {
                     Text("作者 \(authorName(plugin)) · v\(plugin.version)")
                         .font(.system(size: 13))
                         .foregroundStyle(colors.textSecondary)
-                    ViewThatFits(in: .vertical) {
-                        detailText
-                        ScrollView { detailText }
+                        .lineLimit(1)
+                    PluginDetailDescriptionLayout {
+                        detailText.hidden().accessibilityHidden(true)
+                        ViewThatFits(in: .vertical) {
+                            detailText
+                            ScrollView { detailText }
+                        }
                     }
-                    .frame(maxHeight: 280)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             } actions: {
@@ -688,5 +692,22 @@ struct PluginManagementView: View {
                 }
             }
         }
+    }
+}
+
+private struct PluginDetailDescriptionLayout: Layout {
+    private let maxHeight: CGFloat = 280
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let width = proposal.width.flatMap { $0.isFinite ? $0 : nil }
+        // Measure only the text's natural height. The fallback scroll view may claim all the space.
+        let textSize = subviews[0].sizeThatFits(ProposedViewSize(width: width, height: nil))
+        let height = min(textSize.height, maxHeight, proposal.height ?? maxHeight)
+        return CGSize(width: width ?? textSize.width, height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        subviews[1].place(at: bounds.origin, anchor: .topLeading,
+                          proposal: ProposedViewSize(width: bounds.width, height: bounds.height))
     }
 }

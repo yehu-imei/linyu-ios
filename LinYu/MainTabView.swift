@@ -149,11 +149,17 @@ struct MainTabView: View {
                     installed: orderedPlugins,
                     backgroundPluginInstalled: backgroundPluginInstalled,
                     onInstall: { plugin in
+                        if plugin.id == InstalledPlugins.backgroundID && !InstalledPlugins.isInstalled(plugin.id) {
+                            guard backgrounds.clearPluginData() else { return false }
+                        }
                         guard InstalledPlugins.install(plugin) else { return false }
                         syncPlugins()
                         return true
                     },
                     onUninstall: { id in
+                        if id == InstalledPlugins.backgroundID && InstalledPlugins.isInstalled(id) {
+                            guard backgrounds.clearPluginData() else { return false }
+                        }
                         guard InstalledPlugins.uninstall(id) else { return false }
                         syncPlugins()
                         return true

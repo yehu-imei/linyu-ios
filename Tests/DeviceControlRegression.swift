@@ -92,13 +92,50 @@ enum DeviceControlRegression {
         ApiClient.postProjects = []
         let project = ProjectAuthContext(projectId: "89", accountId: "12", owner: "1:88:11",
                                          generation: Session.shared.requestGeneration)
+        let own = #"{"success":false,"errorCode":307,"data":{"snCode":"A","orderNo":"order-A","isOwner":true}}"#
+        let idle = #"{"success":true,"data":null}"#
+        let foreign = #"{"success":false,"errorCode":307,"data":{"orderNo":"","isOwner":false}}"#
+        ApiClient.onPost = {
+            if ApiClient.postPaths.last == usingPath {
+                ApiClient.postResponses[usingPath] = ApiClient.postPaths.contains(closePath) ? idle : own
+            }
+        }
         if case .closed = await CloudShower.close(snCode: "A", orderNo: "order-A", project: project) {
-            check(ApiClient.postPaths == [closePath, usingPath], "关阀受理后确认空闲才返回已关闭")
-            check(ApiClient.postProjects == [project, project], "关阀请求和复核均沿用目标项目账户")
+            check(ApiClient.postPaths == [usingPath, closePath, usingPath], "只关闭预检确认的原订单并复核结果")
+            check(ApiClient.postProjects == [project, project, project], "关阀预检、请求和复核均沿用目标项目账户")
         } else { check(false, "关阀受理后确认空闲才返回已关闭") }
+        ApiClient.onPost = nil
+
+        ApiClient.postPaths = []
+        ApiClient.postResponses[usingPath] = foreign
+        if case .replaced(ownedByCurrentAccount: false) = await CloudShower.close(snCode: "A", orderNo: "order-A", project: project) {
+            check(ApiClient.postPaths == [usingPath], "设备已由他人使用时结束本地原单，不发送关阀")
+        } else { check(false, "他人占用与本地原单状态分开") }
+
+        ApiClient.postPaths = []
+        ApiClient.postResponses[usingPath] = own.replacingOccurrences(of: "order-A", with: "replacement")
+        if case .replaced(ownedByCurrentAccount: true) = await CloudShower.close(snCode: "A", orderNo: "order-A", project: project) {
+            check(ApiClient.postPaths == [usingPath], "同账户另一订单也不能用旧订单动作关闭")
+        } else { check(false, "识别同账户的另一订单") }
+
+        ApiClient.postPaths = []
+        ApiClient.postResponses[usingPath] = foreign.replacingOccurrences(of: "\"isOwner\":false", with: "\"isOwner\":false,\"snCode\":\"B\"")
+        if case .unconfirmed = await CloudShower.close(snCode: "A", orderNo: "order-A", project: project) {
+            check(ApiClient.postPaths == [usingPath], "响应明确属于其他设备不能判定原单结束或发出关阀")
+        } else { check(false, "忽略他设备的占用响应") }
+
+        ApiClient.postPaths = []
+        ApiClient.onPost = {
+            if ApiClient.postPaths.last == usingPath {
+                ApiClient.postResponses[usingPath] = ApiClient.postPaths.contains(closePath) ? foreign : own
+            }
+        }
+        if case .replaced(ownedByCurrentAccount: false) = await CloudShower.close(snCode: "A", orderNo: "order-A", project: project) {
+            check(ApiClient.postPaths == [usingPath, closePath, usingPath], "原单关阀受理后被他人占用只复核，不重发关阀")
+        } else { check(false, "关阀复核确认原单已结束但设备仍被占用") }
+        ApiClient.onPost = nil
 
         let stillRunning = #"{"success":false,"errorCode":307,"data":null}"#
-        let idle = #"{"success":true,"data":null}"#
         for closeReply in [idle, stillRunning] {
             var statusReads = 0
             ApiClient.postPaths = []
@@ -106,11 +143,11 @@ enum DeviceControlRegression {
             ApiClient.onPost = {
                 guard ApiClient.postPaths.last == usingPath else { return }
                 statusReads += 1
-                ApiClient.postResponses[usingPath] = statusReads < 5 ? stillRunning : idle
+                ApiClient.postResponses[usingPath] = statusReads == 1 ? own : (statusReads < 6 ? stillRunning : idle)
             }
             let result = await CloudShower.close(snCode: "A", orderNo: "order-A", project: project, confirmationPause: {})
             if case .closed = result {
-                check(ApiClient.postPaths == [closePath] + Array(repeating: usingPath, count: 5),
+                check(ApiClient.postPaths == [usingPath, closePath] + Array(repeating: usingPath, count: 5),
                       "关阀受理或返回 307 后，延迟到第五次确认空闲也只发送一次关阀")
             } else { check(false, "关阀等待设备延迟回报") }
         }
@@ -118,9 +155,9 @@ enum DeviceControlRegression {
         ApiClient.postResponses.removeValue(forKey: closePath)
 
         ApiClient.postPaths = []
-        ApiClient.postResponses[usingPath] = stillRunning
+        ApiClient.postResponses[usingPath] = own
         if case .unconfirmed = await CloudShower.close(snCode: "A", orderNo: "order-A", project: project, confirmationPause: {}) {
-            check(ApiClient.postPaths == [closePath] + Array(repeating: usingPath, count: 9),
+            check(ApiClient.postPaths == [usingPath, closePath] + Array(repeating: usingPath, count: 9),
                   "关阀受理但一直占用时只复核，不重复关阀")
         } else { check(false, "关阀受理但一直占用时保持未确认") }
         ApiClient.postResponses.removeValue(forKey: usingPath)

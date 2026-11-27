@@ -23,7 +23,6 @@ struct LoginView: View {
     @State private var countdown = 0
     @State private var countdownTask: Task<Void, Never>?
     @State private var smsTask: Task<Void, Never>?
-    @StateObject private var systemPasswords = SystemPasswordPicker()
 
     private var canSubmit: Bool {
         if phone.count != 11 { return false }
@@ -174,15 +173,6 @@ struct LoginView: View {
                     .tint(Color(hex: 0x1A73E8))
                     .disabled(busy)
                     .padding(.top, 12)
-                Button("使用已保存的密码") {
-                    systemPasswords.choose(onFailure: { errorText = $0 }) { user, secret in
-                        guard !busy else { return }
-                        updatePhone(user)
-                        password = secret
-                    }
-                }
-                .font(.system(size: 13)).padding(.top, 12)
-                .buttonStyle(InstantButtonStyle()).disabled(busy)
             }
 
             loginButton

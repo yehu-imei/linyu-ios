@@ -149,7 +149,19 @@ final class BackgroundStore: ObservableObject {
         if FileManager.default.fileExists(atPath: url.path) { try FileManager.default.removeItem(at: url) }
         accents[scope] = nil
         images[scope] = nil
-        update(scope, BackgroundOptions())
+        options[scope] = nil
+        UserDefaults.standard.removeObject(forKey: "background.\(scope.rawValue)")
+    }
+
+    func clearPluginData() -> Bool {
+        do {
+            for scope in BackgroundScope.allCases { try reset(scope) }
+            UserDefaults.standard.removeObject(forKey: "backgroundScope")
+            return true
+        } catch {
+            AppLog.shared.w("无法清理背景装扮插件的数据")
+            return false
+        }
     }
 }
 
@@ -343,21 +355,20 @@ struct CustomBackgroundView: View {
                 if resetConfirm { resetConfirm = false } else { onBack() }
             }
         )
-        .onChange(of: selection) { item in
-            guard let item else { return }
+        .task(id: selection) {
+            guard let item = selection else { return }
             let destination = scope
             loading = true
             errorText = nil
-            Task {
-                defer { loading = false; selection = nil }
-                do {
-                    guard let data = try await item.loadTransferable(type: Data.self) else {
-                        throw CocoaError(.fileReadCorruptFile)
-                    }
-                    try backgrounds.save(data, scope: destination)
-                } catch {
-                    errorText = "图片加载失败，请重试"
+            defer { loading = false; selection = nil }
+            do {
+                guard let data = try await item.loadTransferable(type: Data.self) else {
+                    throw CocoaError(.fileReadCorruptFile)
                 }
+                try Task.checkCancellation()
+                try backgrounds.save(data, scope: destination)
+            } catch {
+                if !Task.isCancelled { errorText = "图片加载失败，请重试" }
             }
         }
     }

@@ -79,7 +79,8 @@ struct ShowerScreenView: View {
                         Text("💧 已预扣 ¥\(remaining)")
                             .font(.system(size: 18, weight: .bold))
                             .foregroundStyle(colors.accent)
-                        Text("计费以热水器显示为准")
+                        // 现有响应没有可确认的计费单位；不把原始 rate 换算成每升或每分钟价格。
+                        Text("费用以实际结算为准")
                             .font(.system(size: 12))
                             .foregroundStyle(colors.textSecondary)
                     }
