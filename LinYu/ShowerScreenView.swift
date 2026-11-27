@@ -75,24 +75,18 @@ struct ShowerScreenView: View {
                         .padding(.top, 4)
 
                     // 预扣金额卡片
-                    VStack(spacing: 4) {
-                        Text("💧 已预扣 ¥\(remaining)")
-                            .font(.system(size: 18, weight: .bold))
-                            .foregroundStyle(colors.accent)
-                        // 现有响应没有可确认的计费单位；不把原始 rate 换算成每升或每分钟价格。
-                        Text("费用以实际结算为准")
-                            .font(.system(size: 12))
-                            .foregroundStyle(colors.textSecondary)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(20)
-                    .background(colors.card)
-                    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 16, style: .continuous)
-                            .strokeBorder(Color.white.opacity(isDark ? 0.18 : 0.6), lineWidth: 1)
-                    )
-                    .padding(.top, 32)
+                    Text("💧 已预扣 ¥\(remaining)")
+                        .font(.system(size: 18, weight: .bold))
+                        .foregroundStyle(colors.accent)
+                        .frame(maxWidth: .infinity)
+                        .padding(20)
+                        .background(colors.card)
+                        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                .strokeBorder(Color.white.opacity(isDark ? 0.18 : 0.6), lineWidth: 1)
+                        )
+                        .padding(.top, 32)
 
                     // 计时器
                     HStack(spacing: 8) {

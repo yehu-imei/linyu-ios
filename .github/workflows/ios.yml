@@ -32,6 +32,7 @@ jobs:
             LinYu/PendingSettlement.swift LinYu/SettlementEngine.swift \
             LinYu/ActiveOrderStore.swift LinYu/MoneyFormat.swift \
             LinYu/PreDeductPolicy.swift Tests/MoneyDisplayRegression.swift \
+            LinYu/WalletRecharge.swift Tests/WalletRechargeRegression.swift \
             LinYu/ProfileCache.swift LinYu/DeviceStateParser.swift LinYu/LoginFeedback.swift Tests/ParityBatchRegression.swift \
             LinYu/BleRequestFields.swift \
             LinYu/DeviceAddress.swift Tests/DeviceAddressRegression.swift \

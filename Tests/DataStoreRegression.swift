@@ -106,6 +106,7 @@ struct DataStoreRegression {
         BleReplyBufferRegression.run(check: check)
         await BleSettlementRegression.run(check: check)
         await NotificationFeedbackRegression.run(check: check)
+        await WalletRechargeRegression.run(check: check)
 
         if !failures.isEmpty { fatalError("Regression failures: \(failures.joined(separator: ", "))") }
     }
