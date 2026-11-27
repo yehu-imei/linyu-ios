@@ -18,22 +18,14 @@ struct DialogScrim<Content: View>: View {
                     .ignoresSafeArea()
                     .onTapGesture { onTapOutside?() }
 
-                // ⚠️ 表单类弹窗（改密码 / 换手机号）有 4~5 个输入框，键盘弹出后
-                // 可用高度会大幅缩水。以前是「整块卡片在缩小后的区域里居中」，
-                // 卡片比可视区还高时会上下同时溢出——底部的「发送 / 确定」按钮
-                // 直接跑到键盘后面，而且跟着键盘动画"慢半拍"地重新定位。
-                // 改成 ScrollView + 最小高度居中：够放就居中，放不下就能滚动，
-                // 按钮始终可达，且不会有二次定位的滞后感。
-                ScrollView(.vertical, showsIndicators: false) {
-                    content
-                        .padding(.horizontal, 28)
-                        .padding(.vertical, 24)
-                        .frame(minHeight: geometry.size.height)
-                }
-                // scrollBounceBehavior 要 iOS 16.4+，部署目标是 16.0 —— 用弹跳开关的
-                // 等价写法：内容放得下时不允许弹跳（`alwaysBounceVertical = false` 的默认行为
-                // 在 SwiftUI 里就是不加 modifier；16.4 以下本来也不会过度滚动）。
-                .scrollDismissesKeyboard(.interactively)
+                // ⚠️ 这里**不能**用 ScrollView 包住整块内容：它会把整个视口都变成
+                // 可点击区域，点遮罩就再也关不掉弹窗了（真机反馈）。
+                // 键盘撑不下时的处理放在 AlertCard 内部（内容区可滚动、按钮固定）。
+                content
+                    .padding(.horizontal, 28)
+                    .padding(.vertical, 24)
+                    // 高度上限 = 可视区（键盘弹出后会缩小），卡片不会再溢出到键盘后面
+                    .frame(maxWidth: .infinity, maxHeight: geometry.size.height)
             }
         }
         // 用整块屏幕定位，键盘弹出时仍为表单保留可用空间。
@@ -83,8 +75,15 @@ struct AlertCard<Content: View, Actions: View>: View {
             }
             .frame(maxWidth: .infinity, alignment: titleAlign == .center ? .center : .leading)
 
-            content
-                .padding(.top, contentSpacing)
+            // ViewThatFits：先按内容自然高度排；键盘把空间压小、放不下时，
+            // 换成「可滚动的内容区」——动作按钮始终留在卡片底部，不会被顶到键盘后面。
+            ViewThatFits(in: .vertical) {
+                content.padding(.top, contentSpacing)
+                ScrollView(.vertical, showsIndicators: false) {
+                    content.padding(.top, contentSpacing)
+                }
+                .scrollDismissesKeyboard(.interactively)
+            }
 
             HStack(spacing: 4) {
                 Spacer(minLength: 0)

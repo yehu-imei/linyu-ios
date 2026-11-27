@@ -63,6 +63,9 @@ struct MainTabView: View {
 
     var body: some View {
         ZStack(alignment: .bottom) {
+            // 页面区（含底部导航栏）忽略键盘安全区：键盘弹出时导航栏不该被顶到屏幕中间；
+            // 弹窗挂在最外层 overlay 上，仍保留键盘避让。
+            ZStack(alignment: .bottom) {
             AppBackground(scope: flow.activeOrder != nil && !showerMinimized ? .shower : .home,
                           backgroundPluginInstalled: backgroundPluginInstalled)
 
@@ -136,7 +139,6 @@ struct MainTabView: View {
                         // ⚠️ 键盘弹出时容器底部安全区会变成键盘高度，导航栏会被顶到屏幕中间
                         // （登录后键盘收起的过程中也在动，看起来像"导航栏从中间滑到下面"）。
                         // 关掉键盘安全区后它始终贴在屏幕底部。
-                        .ignoresSafeArea(.keyboard, edges: .bottom)
                         .transition(.identity)
                 }
             }
@@ -144,6 +146,8 @@ struct MainTabView: View {
         }
         // 铺到屏幕最下沿：Android 是 edge-to-edge + 各页面只加 statusBarsPadding，
         // 底部一律不留白。放在这一层，页面内部就不会各自算一遍安全区。
+            .ignoresSafeArea(.keyboard, edges: .bottom)
+            }
         .ignoresSafeArea(.container, edges: .bottom)
         .allowsHitTesting(!showPluginManagement)
         .accessibilityHidden(showPluginManagement)
