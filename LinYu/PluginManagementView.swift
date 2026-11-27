@@ -491,6 +491,13 @@ struct PluginManagementView: View {
                         .font(.system(size: 13))
                         .foregroundStyle(colors.textSecondary)
                         .lineLimit(1)
+                    if !plugin.permissions.isEmpty {
+                        // v2：把插件声明访问的数据/动作直接摆给用户看（知情权，不是装饰）
+                        Text("权限：" + plugin.permissions.map(PluginRepository.permissionLabel).joined(separator: "、"))
+                            .font(.system(size: 13))
+                            .foregroundStyle(colors.textSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                     PluginDetailDescriptionLayout {
                         detailText.hidden().accessibilityHidden(true)
                         ViewThatFits(in: .vertical) {

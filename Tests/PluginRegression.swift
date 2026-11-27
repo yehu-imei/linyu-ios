@@ -151,5 +151,54 @@ struct PluginRegression {
         try check(InstalledPlugins.install(trend, defaults: defaults, bundled: bundled) &&
                   !InstalledPlugins.install(trend, defaults: defaults, bundled: bundled),
                   "the default plugin can be reinstalled offline")
+
+        // ── 清单 v2：版本门控 + 权限声明 + 双源（与 Android 端对齐）──
+        let pinnedVersion = PluginRepository.appVersionOverride
+        PluginRepository.appVersionOverride = "3.1.2"
+        defer { PluginRepository.appVersionOverride = pinnedVersion }
+
+        try check(manifest.apiVersion == 1 && manifest.permissions.isEmpty && manifest.minAppVersion == nil,
+                  "v1 manifest keeps working with defaults")
+
+        func entry(_ extra: [String: Any]) throws -> [String: Any] {
+            var base = try JSONSerialization.jsonObject(with: plain) as! [String: Any]
+            base["path"] = listing.path
+            base["sha256"] = checksum
+            for (key, value) in extra { base[key] = value }
+            return base
+        }
+        let plainEntry = try entry([:])
+        func count(_ extra: [String: Any]) throws -> Int {
+            try PluginRepository.parseCatalog(catalog([try entry(extra)])).count
+        }
+
+        try check(try count(["apiVersion": 2]) == 1, "apiVersion 2 is accepted")
+        try check(try count(["apiVersion": 3]) == 0, "apiVersion above client support is skipped")
+        try check(try count(["minAppVersion": "1.0.0"]) == 1, "minAppVersion below current app is accepted")
+        try check(try count(["minAppVersion": "99.0.0"]) == 0, "minAppVersion above current app is skipped")
+        try check(try PluginRepository.parseCatalog(
+                      catalog([try entry(["permissions": ["wallet.balance.read", "bill.list.read"]])]))
+                      .first?.manifest.permissions == ["wallet.balance.read", "bill.list.read"],
+                  "known permissions are parsed and exposed to the UI")
+        try check(try count(["permissions": ["filesystem.write"]]) == 0,
+                  "unknown permission is rejected (fail closed)")
+        try check(try PluginRepository.parseCatalog(
+                      catalog([try entry(["apiVersion": 3]), plainEntry])).count == 1,
+                  "one unsupported plugin does not break the rest of the catalog")
+
+        let v2 = PluginManifest(id: "room-binding", name: manifest.name, author: manifest.author,
+                                version: manifest.version, description: manifest.description,
+                                apiVersion: 2, minAppVersion: "3.1.2", permissions: ["device.room-filter"])
+        let v2Data = PluginRepository.manifestData(v2)
+        try check(v2Data != nil && (try PluginRepository.parsePackage(v2Data!)) == v2,
+                  "v2 fields survive serialization round trip")
+        try check(PluginRepository.compareVersions([3, 1, 2], [3, 1, 3]) < 0 &&
+                  PluginRepository.compareVersions([3, 2, 0], [3, 1, 9]) > 0 &&
+                  PluginRepository.compareVersions([3, 1, 2], [3, 1, 2]) == 0,
+                  "version comparison is segment wise")
+        try check(PluginRepository.repositorySources.count == 2 &&
+                  PluginRepository.repositorySources[0].hasPrefix("https://raw.giteeusercontent.com/") &&
+                  PluginRepository.repositorySources[1].hasPrefix("https://raw.githubusercontent.com/"),
+                  "plugin sources are Gitee first and GitHub as fallback")
     }
 }

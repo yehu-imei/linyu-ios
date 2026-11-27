@@ -4,6 +4,8 @@ import SwiftUI
 struct LinYuApp: App {
     init() {
         AppLog.shared.i("App 启动")
+        // 插件仓库自己的日志也进 AppLog（文件里不直接依赖 AppLog，便于单测编译）
+        PluginRepository.log = { AppLog.shared.i($0) }
         AppNotifications.shared.configure()
     }
 

@@ -11,9 +11,16 @@ struct PluginManifest: Equatable, Identifiable, Sendable {
     let details: String?
     let authorGithubID: Int64?
     let versionEpoch: Int
+    /// 插件依赖的客户端能力版本；客户端只接受 `<= supportedAPI`
+    let apiVersion: Int
+    /// 要求的最低 App 版本（x.y.z）；低于它的客户端直接跳过该插件
+    let minAppVersion: String?
+    /// 插件会访问的数据/动作；不在客户端白名单里的权限一律拒绝（fail closed）
+    let permissions: [String]
 
     init(id: String, name: String, author: String, version: String, description: String,
-         details: String? = nil, authorGithubID: Int64? = nil, versionEpoch: Int = 0) {
+         details: String? = nil, authorGithubID: Int64? = nil, versionEpoch: Int = 0,
+         apiVersion: Int = 1, minAppVersion: String? = nil, permissions: [String] = []) {
         self.id = id
         self.name = name
         self.author = author
@@ -22,6 +29,9 @@ struct PluginManifest: Equatable, Identifiable, Sendable {
         self.details = details
         self.authorGithubID = authorGithubID
         self.versionEpoch = versionEpoch
+        self.apiVersion = apiVersion
+        self.minAppVersion = minAppVersion
+        self.permissions = permissions
     }
 }
 
@@ -63,7 +73,58 @@ enum PluginRepository {
         InstalledPlugins.backgroundID: "appearance.background",
         InstalledPlugins.runtimeLogID: "diagnostics.runtime-log"
     ]
-    private static let baseURL = "https://raw.giteeusercontent.com/yehu-imei/linyu-plugins/raw/main/"
+    /// 下载源，**按顺序尝试**：主源 Gitee，备源 GitHub raw。
+    /// 两个源必须放同一份文件（同一个 sha256），否则会出现"主源能装、备源校验失败"。
+    private static let sources = [
+        "https://raw.giteeusercontent.com/yehu-imei/linyu-plugins/raw/main/",
+        "https://raw.githubusercontent.com/yehu-imei/linyu-plugins/main/",
+    ]
+
+    /// 当前生效的下载源（按优先级），回归测试用它锁住「主 Gitee、备 GitHub」
+    static var repositorySources: [String] { sources }
+
+    /// 客户端支持的插件 API 版本上限
+    static let supportedAPI = 2
+
+    /// 允许插件声明的权限（与 Android 端保持一致）
+    static let knownPermissions: Set<String> = [
+        "device.nearby", "device.room-filter",
+        "wallet.balance.read", "bill.list.read",
+        "usage.keep-screen-on", "appearance.background", "diagnostics.runtime-log",
+        "action.open-url", "action.open-recharge",
+    ]
+
+    /// 日志出口。默认丢弃，App 启动时接到 `AppLog` 上。
+    ///
+    /// 为什么不用 `AppLog.shared` 直接写：CI 的 swiftc 只编译
+    /// `PluginRepository + PluginZip + PluginRegression` 三个文件，
+    /// 引 AppLog 会把整个日志模块连带拉进来。留一个可注入的钩子最省事。
+    static var log: (String) -> Void = { _ in }
+
+    /// 测试用：覆盖当前 App 版本（swiftc 回归里没有 Bundle 版本号）
+    static var appVersionOverride: String?
+
+    /// 当前 App 版本，用于 `minAppVersion` 判定
+    static var appVersion: String {
+        if let override = appVersionOverride { return override }
+        return Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0.0"
+    }
+
+    /// 权限 id → 给用户看的中文说明
+    static func permissionLabel(_ id: String) -> String {
+        switch id {
+        case "device.nearby": return "读取附近设备"
+        case "device.room-filter": return "按寝室筛选设备"
+        case "wallet.balance.read": return "读取钱包/一卡通余额"
+        case "bill.list.read": return "读取消费账单"
+        case "usage.keep-screen-on": return "用水时保持屏幕常亮"
+        case "appearance.background": return "修改界面背景"
+        case "diagnostics.runtime-log": return "读写运行日志"
+        case "action.open-url": return "打开声明过的网页"
+        case "action.open-recharge": return "打开官方充值入口"
+        default: return id
+        }
+    }
 
     private final class NoRedirect: NSObject, URLSessionTaskDelegate {
         func urlSession(
@@ -199,6 +260,10 @@ enum PluginRepository {
         var seen = Set<String>()
         return try entries.compactMap { item in
             guard let id = item["id"] as? String, capabilities[id] != nil, isFormatOne(item) else { return nil }
+            if let reason = unsupportedReason(item) {
+                log("跳过插件 \(id)：\(reason)")
+                return nil
+            }
             let manifest = try parseManifest(item)
             guard let path = item["path"] as? String, path == packagePath(for: manifest),
                   let checksum = item["sha256"] as? String, isSHA256(checksum) else {
@@ -228,7 +293,9 @@ enum PluginRepository {
             ? try PluginZip.readManifest(data, limit: manifestLimit)
             : data
         guard manifestData.count <= manifestLimit else { throw PluginError("插件清单过大") }
-        return try parseManifest(jsonObject(manifestData, error: "插件清单无效"))
+        let json = try jsonObject(manifestData, error: "插件清单无效")
+        if let reason = unsupportedReason(json) { throw PluginError(reason) }
+        return try parseManifest(json)
     }
 
     static func manifestData(_ manifest: PluginManifest) -> Data? {
@@ -245,11 +312,38 @@ enum PluginRepository {
         if let details = manifest.details { json["details"] = details }
         if let id = manifest.authorGithubID { json["authorGithubId"] = id }
         if manifest.versionEpoch != 0 { json["versionEpoch"] = manifest.versionEpoch }
+        if manifest.apiVersion != 1 { json["apiVersion"] = manifest.apiVersion }
+        if let minAppVersion = manifest.minAppVersion { json["minAppVersion"] = minAppVersion }
+        if !manifest.permissions.isEmpty { json["permissions"] = manifest.permissions }
         guard (try? parseManifest(json)) == manifest else { return nil }
         return try? JSONSerialization.data(withJSONObject: json)
     }
 
+    /// 从插件仓库取文件：**按 [sources] 顺序尝试**，任一成功即返回。
+    ///
+    /// 只有网络层/HTTP 失败才换源；拿到内容之后的校验（大小、SHA-256、清单字段）不重试 ——
+    /// 那是文件本身的问题，换源只会拿到同一份坏文件。
     private static func fetch(_ path: String) async throws -> Data {
+        var lastError: Error?
+        for base in sources {
+            do {
+                return try await fetch(from: base, path: path)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch let error as PluginError {
+                log("插件源不可用：\(base)（\(path)）")
+                lastError = error
+            } catch {
+                try Task.checkCancellation()
+                log("插件源不可用：\(base)（\(path)）")
+                lastError = error
+            }
+        }
+        if let lastError { throw PluginError(lastError.localizedDescription) }
+        throw PluginError("无法连接插件仓库，请稍后重试")
+    }
+
+    private static func fetch(from baseURL: String, path: String) async throws -> Data {
         guard let url = URL(string: baseURL + path) else { throw PluginError("插件下载地址无效") }
         do {
             let (bytes, response) = try await session.bytes(from: url)
@@ -275,6 +369,43 @@ enum PluginRepository {
             try Task.checkCancellation()
             throw PluginError("无法连接插件仓库，请稍后重试")
         }
+    }
+
+    /// 当前客户端能不能用这条清单；能用返回 nil，不能用返回原因。
+    ///
+    /// 三类限制（v1 清单全部走默认值、永远通过）：
+    /// 1. `apiVersion` 高于 [supportedAPI]
+    /// 2. `minAppVersion` 高于当前 App 版本
+    /// 3. 声明了 [knownPermissions] 之外的权限（fail closed）
+    static func unsupportedReason(_ json: [String: Any]) -> String? {
+        let api = (json["apiVersion"] as? Int) ?? 1
+        if api > supportedAPI { return "需要新版淋浴（插件 apiVersion=\(api)）" }
+
+        if let raw = (json["minAppVersion"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !raw.isEmpty {
+            guard let required = versionParts(raw) else { return "插件的最低版本号无效" }
+            guard let current = versionParts(appVersion) else {
+                return "需要淋浴 \(raw) 及以上（当前 \(appVersion)）"
+            }
+            if compareVersions(required, current) > 0 {
+                return "需要淋浴 \(raw) 及以上（当前 \(appVersion)）"
+            }
+        }
+
+        let permissions = (json["permissions"] as? [String]) ?? []
+        let unknown = permissions.filter { !knownPermissions.contains($0) }
+        if !unknown.isEmpty { return "声明了未知权限：\(unknown.joined(separator: "、"))" }
+        return nil
+    }
+
+    /// 逐段比较 x.y.z；a < b 返回负数
+    static func compareVersions(_ a: [Int], _ b: [Int]) -> Int {
+        for index in 0..<max(a.count, b.count) {
+            let x = index < a.count ? a[index] : 0
+            let y = index < b.count ? b[index] : 0
+            if x != y { return x - y }
+        }
+        return 0
     }
 
     private static func parseManifest(_ json: [String: Any]) throws -> PluginManifest {
@@ -303,10 +434,17 @@ enum PluginRepository {
         // 正式首版以 v1.0.0 起步，仍应更新此前已安装的预览版。
         let epoch: Int64? = json["versionEpoch"] == nil ? 0 : positiveInt(json["versionEpoch"])
         guard let epoch, (0...1).contains(epoch) else { throw PluginError("插件版本无效") }
+        let apiVersion = (json["apiVersion"] as? Int) ?? 1
+        let minAppVersion = (json["minAppVersion"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .flatMap { $0.isEmpty ? nil : $0 }
+        let permissions = (json["permissions"] as? [String]) ?? []
         return try PluginManifest(id: id, name: required("name", limit: 48),
                                   author: legacyAuthor ?? (legacyOwner ? "yehu-imei" : author), version: version,
                                   description: required("description", limit: 300), details: details,
-                                  authorGithubID: authorID ?? legacyID, versionEpoch: Int(epoch))
+                                  authorGithubID: authorID ?? legacyID, versionEpoch: Int(epoch),
+                                  apiVersion: apiVersion, minAppVersion: minAppVersion,
+                                  permissions: permissions)
     }
 
     private static func packagePath(for manifest: PluginManifest) -> String? {

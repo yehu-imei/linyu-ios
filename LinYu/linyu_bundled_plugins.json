@@ -39,7 +39,7 @@
       "author": "MengQingSSSS",
       "version": "1.0.0",
       "description": "在使用页保持屏幕亮起",
-      "details": "在开关管理中开启后，淋浴在前台显示使用页时会保持屏幕亮起，方便查看时长和结束用水。离开使用页后恢复设备原有的息屏行为。首次安装默认关闭。",
+      "details": "在开关管理中开启后，淋浴在前台显示使用页时会保持屏幕亮起，方便查看时长和结束用水。离开使用页后恢复设备原有的息屏行为。",
       "formatVersion": 1,
       "capabilities": [
         "usage.keep-screen-on"
