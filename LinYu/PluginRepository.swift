@@ -435,8 +435,10 @@ enum PluginRepository {
         let epoch: Int64? = json["versionEpoch"] == nil ? 0 : positiveInt(json["versionEpoch"])
         guard let epoch, (0...1).contains(epoch) else { throw PluginError("插件版本无效") }
         let apiVersion = (json["apiVersion"] as? Int) ?? 1
-        let minAppVersion = (json["minAppVersion"] as? String)?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        // ⚠️ 必须用 Optional.map/flatMap：直接写 `(x as? String)?.trimmingCharacters(...)`
+        // 会让编译器把后面的 `.flatMap` 解析成 String 的 Sequence.flatMap（元素是 Character）
+        let minAppVersion: String? = (json["minAppVersion"] as? String)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .flatMap { $0.isEmpty ? nil : $0 }
         let permissions = (json["permissions"] as? [String]) ?? []
         return try PluginManifest(id: id, name: required("name", limit: 48),
