@@ -38,8 +38,10 @@ struct WalletRechargeMode: Decodable {
     }
 
     var appPay: WalletRechargeInfo.AppPay {
-        guard let payWay, payWay.allSatisfy({ $0.wholeNumber != nil }) else { return .unknown }
-        return payWay.contains { $0.wholeNumber == 2 } ? .supported : .unsupported
+        guard let payWay else { return .unknown }
+        let codes = payWay.compactMap(\.wholeNumber)
+        guard codes.count == payWay.count, codes.allSatisfy({ $0 >= 0 }) else { return .unknown }
+        return codes.contains(2) ? .supported : .unsupported
     }
 }
 

@@ -4,7 +4,7 @@ import Combine
 @MainActor
 final class UserPresentation: ObservableObject {
     enum Page: String, Identifiable {
-        case background, log
+        case background, log, recharge
         var id: String { rawValue }
     }
     enum Dialog { case phone, password, useCode, room, logout }

@@ -5,9 +5,8 @@ import SwiftUI
 /// 自上而下：余额标题 → 余额卡 → 消费趋势 → 账单（**最近 20 次**）→ 账单详情弹窗。
 struct WalletScreenView: View {
     @ObservedObject private var widgets = WidgetBridge.shared
-    @EnvironmentObject private var session: Session
+    @EnvironmentObject private var presentation: UserPresentation
     @Environment(\.appColors) private var colors
-    @Environment(\.openURL) private var openURL
 
     /// 账单/余额由容器层持有（对照 Android 的 MainViewModel），
     /// 页面切走再切回来不会重新请求
@@ -21,7 +20,6 @@ struct WalletScreenView: View {
     /// 待确认的代扣账单。这是动钱的操作，不弹确认框直接扣太莽了
     @State private var pendingDeduct: BillDTO?
     @State private var showEditDialog = false
-    @State private var showRechargeDialog = false
     @State private var editValue = ""
     @State private var trendEnabled = Prefs.trendEnabled
     @State private var showWalletBalance = false
@@ -142,11 +140,6 @@ struct WalletScreenView: View {
             if showEditDialog {
                 manualBalanceDialog
             }
-            if showRechargeDialog {
-                WalletRechargeDialog(generation: session.requestGeneration,
-                                     onOpenOfficial: openOfficialRecharge,
-                                     onDismiss: { showRechargeDialog = false })
-            }
             if let bill = pendingDeduct {
                 DeductConfirmDialogView(
                     amount: bill.yuan,
@@ -223,7 +216,8 @@ struct WalletScreenView: View {
 
     private var alipayRechargeButton: some View {
         Button {
-            showRechargeDialog = true
+            guard store.sessionIsCurrent else { return }
+            presentation.page = .recharge
         } label: {
             HStack(spacing: 3) {
                 Text("支付宝充值").font(.system(size: 13, weight: .semibold))
@@ -235,18 +229,6 @@ struct WalletScreenView: View {
             .background(colors.accent.opacity(0.10), in: Capsule())
         }
         .buttonStyle(InstantButtonStyle())
-    }
-
-    private func openOfficialRecharge() {
-        guard store.sessionIsCurrent,
-              let url = URL(string: "alipays://platformapi/startapp?appId=2018090661238647&page=pages%2Frecharge%2Frecharge") else { return }
-        openURL(url) { accepted in
-            Task { @MainActor in
-                guard store.sessionIsCurrent else { return }
-                if accepted { showRechargeDialog = false }
-                else { flow.toast = "无法打开小程序，请在支付宝搜索「趣智校园」" }
-            }
-        }
     }
 
     // MARK: - 账单卡片

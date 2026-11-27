@@ -189,6 +189,8 @@ struct MainTabView: View {
                 CustomBackgroundView(onBack: { userPresentation.page = nil })
             case .log:
                 LogView(onBack: { userPresentation.page = nil })
+            case .recharge:
+                RechargeView(onBack: { userPresentation.page = nil })
             }
         }
         .overlay { flowDialogs }
