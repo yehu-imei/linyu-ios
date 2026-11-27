@@ -160,16 +160,16 @@ struct PluginRegression {
         try check(manifest.apiVersion == 1 && manifest.permissions.isEmpty && manifest.minAppVersion == nil,
                   "v1 manifest keeps working with defaults")
 
-        func entry(_ extra: [String: Any]) throws -> [String: Any] {
+        func catalogEntry(_ extra: [String: Any]) throws -> [String: Any] {
             var base = try JSONSerialization.jsonObject(with: plain) as! [String: Any]
             base["path"] = listing.path
             base["sha256"] = checksum
             for (key, value) in extra { base[key] = value }
             return base
         }
-        let plainEntry = try entry([:])
+        let plainEntry = try catalogEntry([:])
         func count(_ extra: [String: Any]) throws -> Int {
-            try PluginRepository.parseCatalog(catalog([try entry(extra)])).count
+            try PluginRepository.parseCatalog(catalog([try catalogEntry(extra)])).count
         }
 
         try check(try count(["apiVersion": 2]) == 1, "apiVersion 2 is accepted")
@@ -177,13 +177,13 @@ struct PluginRegression {
         try check(try count(["minAppVersion": "1.0.0"]) == 1, "minAppVersion below current app is accepted")
         try check(try count(["minAppVersion": "99.0.0"]) == 0, "minAppVersion above current app is skipped")
         try check(try PluginRepository.parseCatalog(
-                      catalog([try entry(["permissions": ["wallet.balance.read", "bill.list.read"]])]))
+                      catalog([try catalogEntry(["permissions": ["wallet.balance.read", "bill.list.read"]])]))
                       .first?.manifest.permissions == ["wallet.balance.read", "bill.list.read"],
                   "known permissions are parsed and exposed to the UI")
         try check(try count(["permissions": ["filesystem.write"]]) == 0,
                   "unknown permission is rejected (fail closed)")
         try check(try PluginRepository.parseCatalog(
-                      catalog([try entry(["apiVersion": 3]), plainEntry])).count == 1,
+                      catalog([try catalogEntry(["apiVersion": 3]), plainEntry])).count == 1,
                   "one unsupported plugin does not break the rest of the catalog")
 
         let v2 = PluginManifest(id: "room-binding", name: manifest.name, author: manifest.author,
