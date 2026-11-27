@@ -97,7 +97,9 @@ struct UserScreenView: View {
                     moveHint: "移到设置页面",
                     onMove: { moveAcrossPages($0, to: .settings) }
                 ) { type in
-                    card(type)
+                    // 插件管理被移到「我的」页时也要渲染，否则是空白卡
+                    if type == .pluginManagement { pluginManagementEntry }
+                    else { card(type) }
                 }
 
                 Color.clear.frame(height: 100)
@@ -116,10 +118,6 @@ struct UserScreenView: View {
             VStack(alignment: .leading, spacing: 0) {
                 header(showBack: true)
 
-                if !visibleCards(in: pages.settings, hidden: settingsHidden).contains(.featureManagement) {
-                    pluginManagementEntry
-                }
-
                 cardList(
                     order: $pages.settings,
                     hidden: $settingsHidden,
@@ -127,10 +125,10 @@ struct UserScreenView: View {
                     moveIcon: "arrow.left",
                     moveHint: "移到我的页面",
                     onMove: { moveAcrossPages($0, to: .profile) },
-                    onMoveIntoFeatures: { moveCard($0, to: .features) },
-                    showPluginEntryAfterGroup: true
+                    onMoveIntoFeatures: { moveCard($0, to: .features) }
                 ) { type in
-                    if type == .featureManagement { featureManagementCard }
+                    if type == .pluginManagement { pluginManagementEntry }
+                    else if type == .featureManagement { featureManagementCard }
                     else { card(type) }
                 }
 
@@ -272,7 +270,6 @@ struct UserScreenView: View {
         onMove: @escaping (UserCardType) -> Void,
         onMoveIntoFeatures: ((UserCardType) -> Void)? = nil,
         spacing: CGFloat = 16,
-        showPluginEntryAfterGroup: Bool = false,
         @ViewBuilder content: @escaping (UserCardType) -> Content
     ) -> some View {
         let visible = visibleCards(in: order.wrappedValue, hidden: hidden.wrappedValue)
@@ -329,9 +326,6 @@ struct UserScreenView: View {
             }
             .padding(.bottom, spacing)
 
-            if showPluginEntryAfterGroup && type == .featureManagement {
-                pluginManagementEntry
-            }
         }
     }
 
@@ -430,6 +424,7 @@ struct UserScreenView: View {
         case .about: AboutCardView()
         case .log: LogCardView { presentation.page = .log }
         case .featureManagement: EmptyView()
+        case .pluginManagement: EmptyView()
         }
     }
 

@@ -4,7 +4,8 @@ enum UserCardLayoutRegression {
     static func run(check: (Bool, String) -> Void) {
         let defaults = UserCardLayout.restorePages(profileSaved: "", settingsSaved: "")
         check(defaults.profile == [.account, .useCode, .boundRoom], "我的页面默认顺序包含绑定寝室的位置")
-        check(defaults.settings == [.featureManagement, .background, .log, .about, .update], "设置独立显示背景与日志")
+        check(defaults.settings == [.featureManagement, .pluginManagement, .background, .log, .about, .update],
+              "设置页默认包含开关管理与插件管理，再是背景与日志")
         check(defaults.features == [.notify, .trend, .keepScreenOn], "开关管理只包含通知、消费趋势与屏幕常亮")
         let moved = UserCardLayout.move(.account, to: .settings, in: defaults)
         check(moved.profile == [.useCode, .boundRoom] && moved.settings.last == .account, "移到设置放在末尾")
@@ -19,16 +20,19 @@ enum UserCardLayoutRegression {
         check(all.count == UserCardType.allCases.count && Set(all).count == all.count, "重复未知及跨页冲突恢复后每卡恰好一份")
         check(broken.profile.prefix(2) == [.account, .log] && !broken.features.contains(.log), "旧版已移到我的卡片留在原页")
         let previous = UserCardLayout.restorePages(profileSaved: "account,log,useCode", settingsSaved: "background,about,notify,trend")
-        check(previous.settings == [.background, .about, .featureManagement, .update] &&
+        // 旧布局里 update 在 settingsDefaults 中排在 pluginManagement 之后，
+        // 所以追加顺序是 pluginManagement → update
+        check(previous.settings == [.background, .about, .featureManagement, .pluginManagement, .update] &&
               previous.features == [.notify, .trend, .keepScreenOn], "旧设置只归组开关卡片，背景保留原位置")
         let previousGroup = UserCardLayout.restorePages(profileSaved: "account,useCode,boundRoom", settingsSaved: "about,featureManagement,update",
                                                         featuresSaved: "keepScreenOn,log,trend,background,notify")
-        check(previousGroup.settings == [.about, .featureManagement, .log, .background, .update] &&
+        check(previousGroup.settings == [.about, .featureManagement, .log, .background, .update, .pluginManagement] &&
               previousGroup.features == [.keepScreenOn, .trend, .notify], "旧组内背景和日志按相对顺序移到设置")
         let previousPlacement = UserCardLayout.restorePages(profileSaved: "account,log,useCode", settingsSaved: "background,about,featureManagement,update",
                                                             featuresSaved: "log,background,notify,trend,keepScreenOn")
         check(previousPlacement.profile.prefix(3) == [.account, .log, .useCode] &&
-              previousPlacement.settings == [.background, .about, .featureManagement, .update], "迁移保留背景与日志在其他页面上的已有位置")
+              previousPlacement.settings == [.background, .about, .featureManagement, .update, .pluginManagement],
+              "迁移保留背景与日志在其他页面上的已有位置")
 
         let removed = UserCardLayout.move(.trend, to: .settings, in: defaults)
         check(!removed.features.contains(.trend) && removed.settings.last == .trend, "从开关管理移出到设置")
@@ -38,6 +42,13 @@ enum UserCardLayoutRegression {
               UserCardLayout.move(.account, to: .features, in: defaults) == defaults &&
               UserCardLayout.move(.background, to: .features, in: defaults) == defaults &&
               UserCardLayout.move(.log, to: .features, in: defaults) == defaults, "卡片只能移动到支持的位置")
+
+        // 插件管理现在是普通卡片：可以上下移动、隐藏、跨页移动
+        let managed = UserCardLayout.move(.pluginManagement, to: .profile, in: defaults)
+        check(managed.profile.last == .pluginManagement && !managed.settings.contains(.pluginManagement),
+              "插件管理卡片可以移到我的页面")
+        check(UserCardLayout.move(.pluginManagement, to: .features, in: defaults) == defaults,
+              "插件管理不能移入开关管理组")
 
         let pluginSlot: [UserCardType] = [.account, .boundRoom, .useCode]
         check(UserCardLayout.swap(.account, with: .useCode, in: pluginSlot) == [.useCode, .boundRoom, .account],

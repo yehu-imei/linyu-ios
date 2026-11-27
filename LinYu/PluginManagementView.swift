@@ -73,16 +73,9 @@ struct PluginManagementView: View {
                 .onTapGesture {}
                 .accessibilityHidden(true)
             AppBackground(scope: .home, backgroundPluginInstalled: backgroundPluginInstalled)
-            VStack(spacing: 0) {
-                header
-                if busy {
-                    ProgressView()
-                        .progressViewStyle(.linear)
-                        .tint(colors.accent)
-                        .padding(.horizontal, PageLayout.horizontalInset)
-                }
-                pageContent
-            }
+            // 标题栏放进各自的 ScrollView 里（和其它页面一致），
+            // 这样下拉时标题会跟着内容一起滚上去，而不是钉在顶部。
+            pageContent
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .allowsHitTesting(!showingDialog)
             .accessibilityHidden(showingDialog)
@@ -226,6 +219,17 @@ struct PluginManagementView: View {
         switch page {
         case .management:
             ScrollView(showsIndicators: false) {
+                VStack(spacing: 0) {
+                    header
+                    if busy {
+                        ProgressView()
+                            .progressViewStyle(.linear)
+                            .tint(colors.accent)
+                            .padding(.horizontal, PageLayout.horizontalInset)
+                    }
+                }
+                .padding(.bottom, 4)
+
                 VStack(spacing: Self.cardSpacing) {
                     if installed.isEmpty {
                         emptyMessage("暂无已安装的插件")
@@ -243,6 +247,13 @@ struct PluginManagementView: View {
             .id("installed-plugin-list")
         case .repository:
             ScrollView(showsIndicators: false) {
+                header
+                if busy {
+                    ProgressView()
+                        .progressViewStyle(.linear)
+                        .tint(colors.accent)
+                        .padding(.horizontal, PageLayout.horizontalInset)
+                }
                 VStack(spacing: 10) { repositoryContent }
                     .padding(.horizontal, PageLayout.horizontalInset)
                     .padding(.vertical, 16)

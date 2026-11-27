@@ -133,6 +133,10 @@ struct MainTabView: View {
                     ), colors: backgrounds.colors(colors, backgroundPluginInstalled: backgroundPluginInstalled))
                         .padding(.bottom, 22)
                         .padding(.horizontal, 24)
+                        // ⚠️ 键盘弹出时容器底部安全区会变成键盘高度，导航栏会被顶到屏幕中间
+                        // （登录后键盘收起的过程中也在动，看起来像"导航栏从中间滑到下面"）。
+                        // 关掉键盘安全区后它始终贴在屏幕底部。
+                        .ignoresSafeArea(.keyboard, edges: .bottom)
                         .transition(.identity)
                 }
             }

@@ -18,9 +18,20 @@ struct DialogScrim<Content: View>: View {
                     .ignoresSafeArea()
                     .onTapGesture { onTapOutside?() }
 
-                content
-                    .padding(.horizontal, 28)
-                    .frame(width: geometry.size.width, height: geometry.size.height)
+                // ⚠️ 表单类弹窗（改密码 / 换手机号）有 4~5 个输入框，键盘弹出后
+                // 可用高度会大幅缩水。以前是「整块卡片在缩小后的区域里居中」，
+                // 卡片比可视区还高时会上下同时溢出——底部的「发送 / 确定」按钮
+                // 直接跑到键盘后面，而且跟着键盘动画"慢半拍"地重新定位。
+                // 改成 ScrollView + 最小高度居中：够放就居中，放不下就能滚动，
+                // 按钮始终可达，且不会有二次定位的滞后感。
+                ScrollView(.vertical, showsIndicators: false) {
+                    content
+                        .padding(.horizontal, 28)
+                        .padding(.vertical, 24)
+                        .frame(minHeight: geometry.size.height)
+                }
+                .scrollBounceBehavior(.basedOnSize)
+                .scrollDismissesKeyboard(.interactively)
             }
         }
         // 用整块屏幕定位，键盘弹出时仍为表单保留可用空间。

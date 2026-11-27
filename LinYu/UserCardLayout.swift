@@ -13,6 +13,8 @@ enum UserCardType: String, CaseIterable {
     case about
     case log
     case featureManagement
+    /// 插件管理入口。以前固定渲染、不参与排序/隐藏；现在和别的卡片一样可编辑。
+    case pluginManagement
 
     var title: String {
         switch self {
@@ -27,6 +29,7 @@ enum UserCardType: String, CaseIterable {
         case .about: return "关于项目"
         case .log: return "运行日志"
         case .featureManagement: return "开关管理"
+        case .pluginManagement: return "插件管理"
         }
     }
 }
@@ -46,7 +49,9 @@ enum UserCardLayout {
     }
 
     static let profileDefaults: [UserCardType] = [.account, .useCode, .boundRoom]
-    static let settingsDefaults: [UserCardType] = [.featureManagement, .background, .log, .about, .update]
+    static let settingsDefaults: [UserCardType] = [
+        .featureManagement, .pluginManagement, .background, .log, .about, .update,
+    ]
     static let featureDefaults: [UserCardType] = [.notify, .trend, .keepScreenOn]
 
     /// 保留已有分页和顺序，旧分组中的背景与日志移到设置。
