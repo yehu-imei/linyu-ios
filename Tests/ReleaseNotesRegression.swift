@@ -9,12 +9,15 @@ import Foundation
         }
         let doc = try String(contentsOfFile: "docs/APP_CHANGELOG.md", encoding: .utf8)
         let notes = UserReleaseNotes.parse(doc)
-        check(notes.count == 16 && notes.first?.version == "v3.1.2" && notes.last?.version == "v1.0", "完整读取全部已发布历史版本，不受 Release 十条限制")
+        check(notes.count >= 17 && notes.last?.version == "v1.0", "完整读取全部已发布历史版本，不受 Release 十条限制")
+        let release = notes.first { $0.version == "v3.2.0" }
+        check(release?.date == "2026-11-28" && release?.items.count == 7, "3.2.0 完整保留七条已批准的更新日志")
         check(!notes.contains { $0.date == "待发布" }, "待发布版本不进入应用日志或更新判断")
-        check(notes.allSatisfy { !$0.items.isEmpty && $0.items.count <= 5 && $0.items.allSatisfy { $0.count <= 50 } }, "每版最多五条简短用户文案")
+        check(notes.allSatisfy { !$0.items.isEmpty && $0.items.allSatisfy { $0.count <= 50 } }, "每条用户文案简短且版本内容非空")
         check(!notes.flatMap(\.items).contains { $0.contains("后台用水监控") || $0.contains("单格开关") }, "iOS 不展示 Android 专属能力")
         let android = UserReleaseNotes.parse(doc, platform: "Android")
-        check(android.count == 16 && android.flatMap(\.items).contains { $0.contains("后台用水监控") }, "Android 日志保留平台专属能力")
+        check(android.count >= 17 && android.flatMap(\.items).contains { $0.contains("后台用水监控") }, "Android 日志保留平台专属能力")
+        check(android.first { $0.version == "v3.2.0" }?.items == release?.items, "3.2.0 双端展示同样的七条更新")
         check(!android.flatMap(\.items).contains { $0.contains("通知、扫码权限") }, "Android 不混入 iOS 适配记录")
         let sample = "<!-- linyu-release-notes:1 -->\n## v3.2.0 | 2026-11-05\n- 改善体验\n- 兼容新设备\n- [iOS] 精简提示\n## v3.3.0 | 待发布\n- 未发布\n"
         check(UserReleaseNotes.parse(sample).first?.items.count == 3, "普通优化与兼容条目完整保留，不靠新增修复关键词")
