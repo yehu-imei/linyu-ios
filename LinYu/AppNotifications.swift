@@ -10,6 +10,7 @@ final class AppNotifications: NSObject, ObservableObject, UNUserNotificationCent
     @Published private(set) var settingsRevision = 0
     @Published var destinationTab: Int?
     private var inUseOrders: [String: String] = [:]
+    private var authorizationRefreshID = UUID()
     static var accountKey: String { Session.shared.projectId + ":" + Session.shared.accountId }
 
     func consume(_ id: UUID) { actions.removeAll { $0.id == id } }
@@ -84,9 +85,14 @@ final class AppNotifications: NSObject, ObservableObject, UNUserNotificationCent
         }
     }
     @MainActor func refreshAuthorization() async {
+        let id = UUID()
+        authorizationRefreshID = id
         let settings = await center.notificationSettings()
+        // 卡片打开、App 回前台和授权完成都可能触发读取，忽略较早请求的结果。
+        guard authorizationRefreshID == id else { return }
         let wasDenied = permissionDenied
-        permissionDenied = settings.authorizationStatus == .denied
+        let denied = settings.authorizationStatus == .denied
+        if wasDenied != denied { permissionDenied = denied }
         AppLog.shared.i("通知设置：authorization=\(settings.authorizationStatus.rawValue), alert=\(settings.alertSetting.rawValue), sound=\(settings.soundSetting.rawValue), notificationCenter=\(settings.notificationCenterSetting.rawValue), lockScreen=\(settings.lockScreenSetting.rawValue), bundle=\(Bundle.main.bundleIdentifier ?? "unknown")")
         if wasDenied && (settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional) {
             authorizationError = nil

@@ -218,7 +218,7 @@ struct NotifyCardView: View {
     @Environment(\.appColors) private var colors
     @Environment(\.openURL) private var openURL
     @Environment(\.scenePhase) private var scenePhase
-    private let notifications = AppNotifications.shared
+    @ObservedObject private var notifications = AppNotifications.shared
 
     @State private var enabled = Prefs.notifyEnabled
 
@@ -230,8 +230,10 @@ struct NotifyCardView: View {
                         .font(.system(size: 16, weight: .semibold))
                         .foregroundStyle(colors.textPrimary)
                     if enabled {
-                        Button("通知已开启，点击跳转详细设置", action: openNotificationSettings)
+                        Button(notifications.permissionDenied ? "系统未允许通知，点击前往设置" : "通知已开启，点击跳转详细设置",
+                               action: openNotificationSettings)
                             .buttonStyle(InstantButtonStyle())
+                            .foregroundStyle(notifications.permissionDenied ? colors.warning : colors.textSecondary)
                     } else {
                         Text("用水通知已关闭")
                     }
