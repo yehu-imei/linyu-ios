@@ -22,9 +22,10 @@ final class Session {
 }
 final class AppLog {
     static let shared = AppLog()
+    var lastError = ""
     func i(_ text: String, _ detail: String? = nil) {}
     func w(_ text: String) {}
-    func e(_ text: String, _ detail: String?) {}
+    func e(_ text: String, _ detail: String? = nil) { lastError = text + (detail ?? "") }
 }
 final class MockProtocol: URLProtocol {
     static var status = 200
@@ -93,6 +94,14 @@ final class MockProtocol: URLProtocol {
             let shell = try ApiClient.decodeShell(DeviceInfo.self, from: rejected, path: "regression")
             check(!shell.success && shell.errorCode == 307, "水控外壳解析不吞掉307分支")
         } catch { check(false, "外壳解析不应因业务失败抛错") }
+        do {
+            let invalid = Data(#"{"success":"wrong type","data":{"name":"SyntheticPrivateName"}}"#.utf8)
+            _ = try ApiClient.decodeShell(AccountInfo.self, from: invalid, path: "accountInfo")
+            check(false, "无效个人信息响应应被拒绝")
+        } catch {
+            check(AppLog.shared.lastError.contains("解析失败 accountInfo") &&
+                  !AppLog.shared.lastError.contains("SyntheticPrivateName"), "响应解析失败日志不写原始正文")
+        }
         for (name, request) in methods {
             for status in [401, 403] {
                 Session.shared.isLoggedIn = true

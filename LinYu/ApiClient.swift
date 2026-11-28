@@ -323,8 +323,7 @@ struct ApiClient {
         do {
             return try JSONDecoder().decode(APIResponse<T>.self, from: data)
         } catch {
-            let text = String(data: data, encoding: .utf8) ?? ""
-            AppLog.shared.e("解析失败 \(path)", "\(error.localizedDescription)\n原文: \(text.prefix(300))")
+            AppLog.shared.e("解析失败 \(path)（\(data.count)B，\(type(of: error))）")
             throw ApiError.transport("服务响应异常，请重试")
         }
     }
