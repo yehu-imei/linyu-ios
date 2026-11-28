@@ -12,7 +12,9 @@ struct LinYuApp: App {
     var body: some Scene {
         WindowGroup {
             #if DEBUG
-            if #available(iOS 17.0, *), CommandLine.arguments.contains("--widget-preview") {
+            if CommandLine.arguments.contains("--account-dialog-preview") {
+                AccountDialogPreview()
+            } else if #available(iOS 17.0, *), CommandLine.arguments.contains("--widget-preview") {
                 WidgetPreviewScreen()
             } else {
                 RootView().onOpenURL { WidgetBridge.shared.receive($0) }
@@ -23,3 +25,21 @@ struct LinYuApp: App {
         }
     }
 }
+
+#if DEBUG
+private struct AccountDialogPreview: View {
+    private let isPassword = CommandLine.arguments.contains("--preview-password")
+
+    var body: some View {
+        Color(.systemBackground)
+            .ignoresSafeArea()
+            .overlay {
+                if isPassword {
+                    ChangePasswordDialog(currentPhone: "13800000000") {}
+                } else {
+                    ChangePhoneDialog(currentPhone: "13800000000", onDismiss: {})
+                }
+            }
+    }
+}
+#endif

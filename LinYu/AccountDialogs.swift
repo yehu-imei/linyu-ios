@@ -1,5 +1,34 @@
 import SwiftUI
 
+private struct AccountFormHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
+private struct AccountFormScroll: ViewModifier {
+    @State private var contentHeight: CGFloat?
+
+    func body(content: Content) -> some View {
+        ScrollView(.vertical, showsIndicators: false) {
+            content
+                .fixedSize(horizontal: false, vertical: true)
+                .background {
+                    GeometryReader { proxy in
+                        Color.clear.preference(key: AccountFormHeightKey.self, value: proxy.size.height)
+                    }
+                }
+        }
+        // 测量只限制表单内容的最大高度。卡片、标题和按钮在首帧就可见。
+        .frame(maxHeight: contentHeight)
+        .onPreferenceChange(AccountFormHeightKey.self) { height in
+            if height > 0 { contentHeight = height }
+        }
+        .scrollDismissesKeyboard(.interactively)
+    }
+}
+
 // MARK: - 修改密码
 
 /// 修改密码 —— 对照 Android `UserScreen.ChangePasswordDialog`。
@@ -98,6 +127,7 @@ struct ChangePasswordDialog: View {
                             .foregroundStyle(colors.danger)
                     }
                 }
+                .modifier(AccountFormScroll())
                 .disabled(submitting)
             } actions: {
                 DialogTextButton(title: "取消", color: colors.accent) {
@@ -252,6 +282,7 @@ struct ChangePhoneDialog: View {
                             .foregroundStyle(colors.danger)
                     }
                 }
+                .modifier(AccountFormScroll())
                 .disabled(submitting)
             } actions: {
                 DialogTextButton(title: "取消", color: colors.accent) {

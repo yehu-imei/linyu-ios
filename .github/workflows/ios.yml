@@ -91,7 +91,7 @@ jobs:
           test -s build/LinYu.xcarchive/Products/Applications/LinYu.app/APP_CHANGELOG.md
           test -s build/LinYu.xcarchive/Products/Applications/LinYu.app/linyu_bundled_plugins.json
 
-      - name: 组件离线布局截图
+      - name: 组件与账户弹窗离线布局截图
         run: |
           set -euo pipefail
           xcodebuild build -project LinYu.xcodeproj -scheme LinYu -configuration Debug \
@@ -107,6 +107,12 @@ jobs:
             xcrun simctl launch "$SIM" com.hualala.linyu --widget-preview "--preview-$MODE"
             sleep 3
             xcrun simctl io "$SIM" screenshot "build/widget-previews/$MODE.png"
+          done
+          for FORM in phone password; do
+            xcrun simctl terminate "$SIM" com.hualala.linyu || true
+            xcrun simctl launch "$SIM" com.hualala.linyu --account-dialog-preview "--preview-$FORM"
+            sleep 3
+            xcrun simctl io "$SIM" screenshot "build/widget-previews/account-$FORM.png"
           done
 
       - name: 上传组件布局截图

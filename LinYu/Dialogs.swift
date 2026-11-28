@@ -6,17 +6,10 @@ import SwiftUI
 // 按钮在右下角。iOS 的 `.alert` 只能放系统样式、`.sheet` 从底部升上来——
 // 两者都和 Android 长得不一样，所以这里手工复刻一个居中卡片。
 
-/// 遮罩 + 居中容器。点遮罩是否关闭由 `onTapOutside` 决定（null = 不能关）。
-private struct DialogContentHeightKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
-}
-
+/// 遮罩与居中卡片。卡片首帧直接参与布局，表单根据可见高度滚动。
 struct DialogScrim<Content: View>: View {
     var onTapOutside: (() -> Void)?
     @ViewBuilder let content: Content
-    /// 内容实测高度：用它决定 ScrollView 的高度，避免「整屏可点」和布局切换
-    @State private var measuredHeight: CGFloat = 0
 
     var body: some View {
         GeometryReader { geometry in
@@ -25,27 +18,10 @@ struct DialogScrim<Content: View>: View {
                     .ignoresSafeArea()
                     .onTapGesture { onTapOutside?() }
 
-                // 内容外面套一个 ScrollView，但**高度只取内容自身高度**（见下方 measuredHeight）：
-                //  · 高度 = 卡片高度 → 卡片外的区域仍归遮罩，点外部能正常关闭
-                //  · 键盘把可视区压小时高度被夹到可视区 → 内容可滚动、按钮仍在卡片底部
-                //  · 全程只有一次布局，不做「能放下/放不下」的切换，卡片里的按钮不会跳位置
-                ScrollView(.vertical, showsIndicators: false) {
-                    content
-                        .padding(.horizontal, 28)
-                        .padding(.vertical, 24)
-                        .background(
-                            GeometryReader { proxy in
-                                Color.clear.preference(key: DialogContentHeightKey.self,
-                                                       value: proxy.size.height)
-                            }
-                        )
-                }
-                .frame(width: geometry.size.width,
-                       height: max(min(measuredHeight, geometry.size.height), 0))
-                // 首帧还没测到高度时先不画，避免卡片闪一下再归位
-                .opacity(measuredHeight > 0 ? 1 : 0)
-                .scrollDismissesKeyboard(.interactively)
-                .onPreferenceChange(DialogContentHeightKey.self) { measuredHeight = $0 }
+                content
+                    .padding(.horizontal, 28)
+                    .padding(.vertical, 24)
+                    .frame(width: geometry.size.width, height: geometry.size.height)
             }
         }
         // 用整块屏幕定位，键盘弹出时仍为表单保留可用空间。
@@ -95,9 +71,6 @@ struct AlertCard<Content: View, Actions: View>: View {
             }
             .frame(maxWidth: .infinity, alignment: titleAlign == .center ? .center : .leading)
 
-            // 内容区保持单一布局（滚动由外层 DialogScrim 统一处理）。
-            // ⚠️ 不能用 ViewThatFits：键盘弹出那一瞬会切换布局，卡片里的
-            // 「发送 / 短信验证修改密码」按钮会**跳位置**（真机反馈）。
             content
                 .padding(.top, contentSpacing)
 
