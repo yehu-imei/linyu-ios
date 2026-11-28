@@ -10,6 +10,9 @@ import SwiftUI
 /// iOS 这边同样：不管系统深浅，登录页永远是蓝渐变 + 白卡片。
 struct LoginView: View {
     @EnvironmentObject private var session: Session
+    @FocusState private var phoneFocused: Bool
+    @FocusState private var passwordFocused: Bool
+    @FocusState private var smsFocused: Bool
 
     @State private var phone = ""
     @State private var password = ""
@@ -58,17 +61,26 @@ struct LoginView: View {
                 .offset(x: 60, y: 60)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
 
-            ScrollView {
-                VStack(spacing: 0) {
-                    logo
-                    card
+            GeometryReader { viewport in
+                ScrollView {
+                    VStack(spacing: 0) {
+                        logo
+                        card
+                    }
+                    .padding(.horizontal, 28)
+                    .padding(.top, 90)
+                    .padding(.bottom, 28)
+                    .offset(y: -50)
+                    .frame(minHeight: viewport.size.height, alignment: .top)
+                    .background {
+                        Color.clear
+                            .contentShape(Rectangle())
+                            .onTapGesture(perform: dismissKeyboard)
+                            .accessibilityHidden(true)
+                    }
                 }
-                .padding(.horizontal, 28)
-                .padding(.top, 90)
-                .padding(.bottom, 28)
-                .offset(y: -50)
+                .scrollDismissesKeyboard(.interactively)
             }
-            .scrollDismissesKeyboard(.interactively)
         }
         // 固定白色登录卡片在系统深色模式下也使用深色占位文字。
         .environment(\.colorScheme, .light)
@@ -193,7 +205,11 @@ struct LoginView: View {
         }
         .padding(28)
         .frame(maxWidth: .infinity)
-        .background(Color.white)
+        .background {
+            Color.white
+                .onTapGesture(perform: dismissKeyboard)
+                .accessibilityHidden(true)
+        }
         .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
         // 卡片是白底浮在渐变上，这里**必须**给阴影 —— Android 是 shadowElevation 12
         .shadow(color: .black.opacity(0.25), radius: 12, y: 4)
@@ -208,7 +224,8 @@ struct LoginView: View {
             systemImage: "phone.fill",
             keyboard: isSmsMode ? .numberPad : .default,
             contentType: isSmsMode ? .telephoneNumber : .username,
-            secured: false
+            secured: false,
+            focus: $phoneFocused
         )
     }
 
@@ -219,7 +236,8 @@ struct LoginView: View {
             systemImage: "lock.fill",
             keyboard: .default,
             contentType: .password,
-            secured: true
+            secured: true,
+            focus: $passwordFocused
         )
     }
 
@@ -231,7 +249,8 @@ struct LoginView: View {
                 systemImage: nil,
                 keyboard: .numberPad,
                 contentType: .oneTimeCode,
-                secured: false
+                secured: false,
+                focus: $smsFocused
             )
             Button {
                 sendCode()
@@ -261,11 +280,12 @@ struct LoginView: View {
         systemImage: String?,
         keyboard: UIKeyboardType,
         contentType: UITextContentType,
-        secured: Bool
+        secured: Bool,
+        focus: FocusState<Bool>.Binding
     ) -> some View {
         AccountOutlinedField(title: title, text: text, keyboard: keyboard,
                              contentType: contentType, secured: secured,
-                             leadingIcon: systemImage, showsClear: true)
+                             leadingIcon: systemImage, showsClear: true, focus: focus)
             .environment(\.appColors, .light)
     }
 
@@ -296,6 +316,12 @@ struct LoginView: View {
     }
 
     // MARK: - 动作
+
+    private func dismissKeyboard() {
+        phoneFocused = false
+        passwordFocused = false
+        smsFocused = false
+    }
 
     private var passwordForPhone: String {
         guard let savedCredential, savedCredential.phone == phone else { return "" }

@@ -5,7 +5,7 @@ struct AccountOutlinedField: View {
 
     @Environment(\.appColors) private var colors
     @Environment(\.isEnabled) private var isEnabled
-    @FocusState private var focused: Bool
+    @FocusState private var localFocus: Bool
 
     let title: String
     @Binding var text: String
@@ -14,7 +14,10 @@ struct AccountOutlinedField: View {
     var secured = false
     var leadingIcon: String?
     var showsClear = false
+    var focus: FocusState<Bool>.Binding? = nil
 
+    private var focusBinding: FocusState<Bool>.Binding { focus ?? $localFocus }
+    private var focused: Bool { focusBinding.wrappedValue }
     private var floats: Bool { focused || !text.isEmpty }
     private var corner: RoundedRectangle { RoundedRectangle(cornerRadius: 14, style: .continuous) }
     private var prompt: Text {
@@ -43,7 +46,7 @@ struct AccountOutlinedField: View {
             .textContentType(contentType)
             .textInputAutocapitalization(.never)
             .autocorrectionDisabled()
-            .focused($focused)
+            .focused(focusBinding)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
 
             if showsClear, !text.isEmpty {
@@ -80,7 +83,7 @@ struct AccountOutlinedField: View {
         }
         .contentShape(Rectangle())
         .simultaneousGesture(TapGesture().onEnded {
-            if isEnabled, !focused { focused = true }
+            if isEnabled, !focused { focusBinding.wrappedValue = true }
         })
         .padding(.top, 8)
     }
