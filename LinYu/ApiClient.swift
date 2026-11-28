@@ -323,7 +323,7 @@ struct ApiClient {
         do {
             return try JSONDecoder().decode(APIResponse<T>.self, from: data)
         } catch {
-            AppLog.shared.e("解析失败 \(path)（\(data.count)B，\(type(of: error))）")
+            AppLog.shared.e("解析失败 \(path)（响应大小 \(data.count)B）")
             throw ApiError.transport("服务响应异常，请重试")
         }
     }
