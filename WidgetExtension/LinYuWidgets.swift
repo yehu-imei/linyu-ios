@@ -121,11 +121,8 @@ private struct AndroidWidgetGlyph: View {
 }
 @available(iOS 17.0, *)
 struct LinYuWidgetView: View {
-    @Environment(\.widgetFamily) private var systemFamily
     let entry: LinYuWidgetEntry
     let layout: String
-    var familyOverride: WidgetFamily? = nil
-    private var family: WidgetFamily { familyOverride ?? systemFamily }
     private var snapshot: WidgetSnapshot { entry.snapshot }
     private var tab: Int { snapshot.visibleTab(entry.selection.tab) }
     private var device: WidgetDevice? { snapshot.displayedDevice(entry.selection.device) }

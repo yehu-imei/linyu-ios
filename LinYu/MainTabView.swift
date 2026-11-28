@@ -104,7 +104,10 @@ struct MainTabView: View {
                                 .id(refreshToken)
                         case 1:
                             WalletScreenView(store: store, flow: flow, deduct: deduct,
-                                             trendPluginInstalled: hasPlugin(InstalledPlugins.consumptionTrendID))
+                                             trendPluginInstalled: hasPlugin(InstalledPlugins.consumptionTrendID),
+                                             onManualBalanceChanged: {
+                                                 widgets.sync(store: store, flow: flow, scanner: scanner, force: true)
+                                             })
                         default:
                             UserScreenView(flow: flow, scanner: scanner, settingsVisible: $settingsVisible,
                                            editMode: $editingCards,
@@ -231,7 +234,7 @@ struct MainTabView: View {
         // 订单监控：15 秒一轮查「还在不在用」，结束就收尾（对照 ShowerWatchService）
         .task { flow.startOrderWatch() }
         .task { await deduct.load() }
-        .task { deduct.onBillsChanged = { Task { await store.reload() } } }
+        .task { deduct.onBillsChanged = { Task { await store.reload(afterCurrent: true) } } }
         // 挤号检测：生命周期跟主界面走，回登录页就停
         .task { kickWatch.start() }
         .onDisappear { kickWatch.stop() }
@@ -269,14 +272,11 @@ struct MainTabView: View {
         .onReceive(store.objectWillChange.throttle(for: .milliseconds(300), scheduler: RunLoop.main, latest: true).receive(on: RunLoop.main)) { _ in
             widgets.sync(store: store, flow: flow, scanner: scanner)
         }
-        .onReceive(flow.objectWillChange.throttle(for: .milliseconds(300), scheduler: RunLoop.main, latest: true).receive(on: RunLoop.main)) { _ in
+        .onReceive(flow.widgetUpdates) { _ in
             widgets.sync(store: store, flow: flow, scanner: scanner)
         }
-        .onReceive(scanner.$devices.throttle(for: .seconds(2), scheduler: RunLoop.main, latest: true).receive(on: RunLoop.main)) { _ in
-            widgets.sync(store: store, flow: flow, scanner: scanner)
-        }
-        .onChange(of: scanner.isScanning) { scanning in
-            if !scanning { widgets.sync(store: store, flow: flow, scanner: scanner, force: true) }
+        .onChange(of: scanner.completedNearbyScan?.id) { _ in
+            widgets.sync(store: store, flow: flow, scanner: scanner, force: true)
         }
         .onChange(of: boundRoom) { _ in
             widgets.sync(store: store, flow: flow, scanner: scanner, force: true)
@@ -307,7 +307,9 @@ struct MainTabView: View {
         }
         .onChange(of: flow.settlementRevision) { _ in
             widgets.sync(store: store, flow: flow, scanner: scanner, force: true)
-            Task { await store.reload(); widgets.sync(store: store, flow: flow, scanner: scanner, force: true) }
+        }
+        .onChange(of: flow.billSourceRevision) { _ in
+            Task { await store.reload(afterCurrent: true) }
         }
         .onChange(of: store.loading) { loading in
             if !loading { widgets.sync(store: store, flow: flow, scanner: scanner, force: true) }

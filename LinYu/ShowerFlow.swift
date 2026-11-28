@@ -121,6 +121,18 @@ final class ShowerFlow: ObservableObject {
     @Published private(set) var isStopping = false
     @Published private(set) var lastConsumeYuan: Double?
     @Published private(set) var settlementRevision = 0
+    @Published private(set) var billSourceRevision = 0
+    // WidgetKit ticks from the persisted start date. Ignore the in-app timer's display updates.
+    private(set) lazy var widgetUpdates: AnyPublisher<Void, Never> = Publishers.MergeMany([
+        $activeOrder.dropFirst().map { _ in () }.eraseToAnyPublisher(),
+        $restoredOrders.dropFirst().map { _ in () }.eraseToAnyPublisher(),
+        $deviceOwner.dropFirst().map { _ in () }.eraseToAnyPublisher(),
+        $isStarting.dropFirst().map { _ in () }.eraseToAnyPublisher(),
+        $isStopping.dropFirst().map { _ in () }.eraseToAnyPublisher()
+    ])
+    .throttle(for: .milliseconds(300), scheduler: RunLoop.main, latest: true)
+    .receive(on: RunLoop.main)
+    .eraseToAnyPublisher()
     /// 自动关停弹窗
     @Published var autoClose: AutoCloseNotice?
     /// MQTT 推来的消费金额（元）。nil = 还没收到；使用中没有实时扣费推送。
@@ -321,7 +333,11 @@ final class ShowerFlow: ObservableObject {
         }
 
         // ① 服务端标记 ② 用户上次确认过这台要蓝牙
-        if device.needsBluetoothControl || Prefs.isBleDevice(sn) {
+        let authOwner = ProjectAuthContext.owner(userId: Session.shared.userId, projectId: Session.shared.projectId,
+                                                  accountId: Session.shared.accountId)
+        let awaitingConfirmation = BleRecoveryStore.candidate(owner: AppNotifications.accountKey, authOwner: authOwner,
+                                                               snCode: sn) != nil
+        if device.needsBluetoothControl || Prefs.isBleDevice(sn) || awaitingConfirmation {
             await openBle(device, peripheral: peripheral, central: central, allowNewOrder: allowNewOrder)
         } else {
             await openCloud(device, allowNewOrder: allowNewOrder)
@@ -488,7 +504,7 @@ final class ShowerFlow: ObservableObject {
             return
         }
 
-        let candidate = BleRecoveryStore.candidate(owner: AppNotifications.accountKey, snCode: sn)
+        let candidate = BleRecoveryStore.candidate(owner: AppNotifications.accountKey, authOwner: project.owner, snCode: sn)
         if st.isIdle, candidate != nil { BleRecoveryStore.remove(snCode: sn) }
         if st.hasPendingSettle, candidate != nil {
             ble.disconnect()
@@ -1120,6 +1136,7 @@ final class ShowerFlow: ObservableObject {
                                   automatic: Bool, showAutoClose: Bool = true, deviceStillOccupied: Bool = false) {
         guard workScope.isCurrent else { return }
         settlementRevision += 1
+        billSourceRevision += 1
         guard latestClosedOrders[order.snCode]?.isSameOrder(as: order) == true,
               !ActiveOrderStore.isRunning(order.snCode) else { return }
         let yuan = amount.flatMap { $0.isFinite && $0 >= 0 ? $0 : nil }

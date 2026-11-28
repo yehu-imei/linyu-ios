@@ -25,6 +25,31 @@ enum SessionIsolationRegression {
         RecoveryArchive.activate(owner: "school:B", defaults: defaults)
         check(defaults.object(forKey: "activeOrders") == nil && defaults.dictionary(forKey: "linyu.unassignedRecovery")?["activeOrders"] as? String == "unknown-order", "无归属旧数据隔离保存，不自动交给新账号")
 
+        defaults.removePersistentDomain(forName: suite)
+        let ownerA = "user-A:school:account"
+        let ownerB = "user-B:school:account"
+        RecoveryArchive.activate(owner: "school:account", authOwner: ownerA, defaults: defaults)
+        let candidate = BleRecoveryRecord(owner: "school:account", snCode: "A", orderNo: "pending-A",
+            startedAt: 100, protocolType: "1", randomNumber: "test-only", consumeDate: "date",
+            awaitingOpenConfirmation: true, projectId: "device-school", accountId: "device-account", authOwner: ownerA)
+        BleRecoveryStore.save(candidate, defaults: defaults)
+        BleRecoveryStore.save(BleRecoveryRecord(owner: "school:account", snCode: "B", orderNo: "known-A",
+            startedAt: 100, protocolType: "1", randomNumber: "", consumeDate: "date"), defaults: defaults)
+        RecoveryArchive.suspend(owner: "school:account", preserve: false, authOwner: ownerA, defaults: defaults)
+        check(defaults.object(forKey: BleRecoveryStore.key) == nil, "普通退出不在当前账号区保留蓝牙待确认候选")
+        RecoveryArchive.activate(owner: "school:account", authOwner: ownerB, defaults: defaults)
+        check(defaults.object(forKey: BleRecoveryStore.key) == nil, "相同项目账户编号的不同所有者也不能读取归档候选")
+        RecoveryArchive.suspend(owner: "school:account", preserve: false, authOwner: ownerB, defaults: defaults)
+        RecoveryArchive.activate(owner: "school:account", authOwner: ownerA, defaults: defaults)
+        check(BleRecoveryStore.candidate(owner: "school:account", authOwner: ownerA, snCode: "A", defaults: defaults)?.orderNo == "pending-A" &&
+              BleRecoveryStore.read(owner: "school:account", snCode: "B", orderNo: "known-A", startedAt: 100, defaults: defaults) == nil,
+              "原所有者普通重登只恢复未确认候选")
+        BleRecoveryStore.remove(snCode: "A", defaults: defaults)
+        RecoveryArchive.suspend(owner: "school:account", preserve: false, authOwner: ownerA, defaults: defaults)
+        RecoveryArchive.activate(owner: "school:account", authOwner: ownerA, defaults: defaults)
+        check(BleRecoveryStore.candidate(owner: "school:account", authOwner: ownerA, snCode: "A", defaults: defaults) == nil,
+              "已处理的候选不会从归档重新出现")
+
         let scope = SessionWorkScope()
         var started = false
         let task = Task {

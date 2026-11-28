@@ -21,9 +21,12 @@ struct BleRecoveryRecord: Codable {
     }
 }
 enum BleRecoveryStore {
-    private static let key = "bleSessionJson"
+    static let key = "bleSessionJson"
     private static func all(_ defaults: UserDefaults) -> [BleRecoveryRecord] {
-        guard let text = defaults.string(forKey: key), let data = text.data(using: .utf8) else { return [] }
+        decode(defaults.string(forKey: key))
+    }
+    private static func decode(_ text: String?) -> [BleRecoveryRecord] {
+        guard let text, let data = text.data(using: .utf8) else { return [] }
         return (try? JSONDecoder().decode([BleRecoveryRecord].self, from: data)) ?? []
     }
     static func read(owner: String, snCode: String, orderNo: String, startedAt: Int64,
@@ -34,8 +37,31 @@ enum BleRecoveryStore {
                 ($0.orderNo == orderNo || $0.orderNo.isEmpty || orderNo.isEmpty)
         }
     }
-    static func candidate(owner: String, snCode: String, defaults: UserDefaults = .standard) -> BleRecoveryRecord? {
-        all(defaults).first { $0.owner == owner && $0.snCode == snCode && $0.awaitingOpenConfirmation == true }
+    static func candidate(owner: String, authOwner: String, snCode: String,
+                          defaults: UserDefaults = .standard) -> BleRecoveryRecord? {
+        all(defaults).first {
+            $0.owner == owner && $0.authOwner == authOwner && $0.snCode == snCode &&
+                $0.awaitingOpenConfirmation == true
+        }
+    }
+    static func archiveUnconfirmed(owner: String, authOwner: String, defaults: UserDefaults) -> String? {
+        let pending = all(defaults).filter {
+            $0.awaitingOpenConfirmation == true && $0.owner == owner && $0.authOwner == authOwner
+        }
+        return pending.isEmpty ? nil : encode(pending)
+    }
+    static func excludeUnconfirmed(from text: String?) -> String? {
+        let confirmed = decode(text).filter { $0.awaitingOpenConfirmation != true }
+        return confirmed.isEmpty ? nil : encode(confirmed)
+    }
+    static func restoreUnconfirmed(_ archived: String?, owner: String, authOwner: String,
+                                   defaults: UserDefaults) {
+        let current = all(defaults)
+        let pending = decode(archived).filter { record in
+            record.awaitingOpenConfirmation == true && record.owner == owner && record.authOwner == authOwner &&
+                !current.contains { $0.owner == owner && $0.snCode == record.snCode }
+        }
+        if !pending.isEmpty { write(current + pending, defaults) }
     }
     static func save(_ value: BleRecoveryRecord, defaults: UserDefaults = .standard) {
         var values = all(defaults).filter { $0.owner == value.owner && $0.snCode != value.snCode }
@@ -46,7 +72,11 @@ enum BleRecoveryStore {
         write(all(defaults).filter { $0.snCode != snCode }, defaults)
     }
     private static func write(_ values: [BleRecoveryRecord], _ defaults: UserDefaults) {
-        guard let data = try? JSONEncoder().encode(values), let text = String(data: data, encoding: .utf8) else { return }
+        guard let text = encode(values) else { return }
         defaults.set(text, forKey: key)
+    }
+    private static func encode(_ values: [BleRecoveryRecord]) -> String? {
+        guard let data = try? JSONEncoder().encode(values) else { return nil }
+        return String(data: data, encoding: .utf8)
     }
 }

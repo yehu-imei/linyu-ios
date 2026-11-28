@@ -74,7 +74,8 @@ import WidgetKit
                 time: bill.consumeDate ?? "", money: bill.yuan.map { "-" + MoneyFormat.withSymbol($0) } ?? "—",
                 id: bill.id, deviceSN: bill.deviceSnCode, detail: bill.deviceTypeLabel, amount: bill.yuan)
         }
-        let billSnapshots = store.bills.map(snapshot)
+        var defaultBillSnapshots: [WidgetBill]?
+        var projectBillSnapshots: [String: [WidgetBill]] = [:]
         // 冷启动台账尚未补齐时保留同账号的展示缓存；运行状态仍以当前订单台账为准。
         var infos: [String: WidgetDevice] = [:]
         if previous.owner == next.owner {
@@ -114,35 +115,45 @@ import WidgetKit
             infos[order.snCode] = WidgetDevice(id: order.snCode, name: order.deviceName, detail: "使用中的设备", emoji: order.deviceEmoji,
                 selectable: room.isEmpty, aliases: [order.deviceMac].filter { !$0.isEmpty })
         }
-        if nearbyEnabled {
-            for item in scanner.devices.sorted(by: { $0.rssi > $1.rssi }) {
+        var nearby: (ids: [String], at: Date)?
+        if nearbyEnabled, let scan = scanner.completedNearbyScan {
+            var ids: [String] = []
+            for item in scan.devices {
                 guard let address = item.parsedSnCode else { continue }
                 let sn = store.deviceInfos[address]?.snCode.flatMap { $0.isEmpty ? nil : $0 } ?? address
-                guard infos[sn] != nil else { continue }
+                guard infos[sn] != nil, !ids.contains(sn) else { continue }
                 infos[sn]?.rssi = item.rssi
-                if !next.nearbyIDs.contains(sn) { next.nearbyIDs.append(sn) }
+                ids.append(sn)
             }
-            if scanner.devices.isEmpty, previous.owner == next.owner {
-                next.nearbyIDs = previous.nearbyIDs.filter { infos[$0] != nil }
-                next.nearbyDate = previous.nearbyDate
-            } else { next.nearbyDate = scanner.devices.map(\.lastSeen).max() }
+            nearby = (ids, scan.completedAt)
         }
+        next.updateNearby(completed: nearby, previous: previous, knownIDs: Set(infos.keys))
         for sn in Array(infos.keys) {
             infos[sn]?.occupied = flow.deviceOwner[sn] == false
             if let item = infos[sn] {
                 let cached = Prefs.lastConsumeFor(sn)
-                let legacy = (item.aliases ?? []).map { Prefs.lastConsumeFor($0) }.first { $0 > 0 } ?? 0
-                let projectId = deviceInfos[sn]?.projectId
-                let rows = if let projectId, projectId > 0, String(projectId) != Session.shared.projectId {
-                    store.bills.filter { $0.sourceProjectId == String(projectId) }
-                } else if item.detail.contains("饮水") && projectId == nil {
-                    store.bills.filter { bill in
-                        bill.deviceSnCode.map { $0 == sn || (item.aliases ?? []).contains($0) } ?? false
-                    }
+                let savedAmount = cached > 0 ? cached :
+                    ((item.aliases ?? []).lazy.map { Prefs.lastConsumeFor($0) }.first { $0 > 0 } ?? 0)
+                if savedAmount > 0 {
+                    infos[sn]?.lastConsume = savedAmount
                 } else {
-                    store.balanceBills
+                    let projectId = deviceInfos[sn]?.projectId
+                    let rows: [WidgetBill]
+                    if let projectId, projectId > 0, String(projectId) != Session.shared.projectId {
+                        let id = String(projectId)
+                        if projectBillSnapshots[id] == nil {
+                            projectBillSnapshots[id] = store.bills.filter { $0.sourceProjectId == id }.map(snapshot)
+                        }
+                        rows = projectBillSnapshots[id] ?? []
+                    } else if item.detail.contains("饮水") && projectId == nil {
+                        let addresses = Set([sn] + (item.aliases ?? []))
+                        rows = store.bills.filter { $0.deviceSnCode.map(addresses.contains) == true }.map(snapshot)
+                    } else {
+                        if defaultBillSnapshots == nil { defaultBillSnapshots = store.balanceBills.map(snapshot) }
+                        rows = defaultBillSnapshots ?? []
+                    }
+                    infos[sn]?.lastConsume = WidgetDisplayPolicy.lastConsume(cached: 0, device: item, bills: rows)
                 }
-                infos[sn]?.lastConsume = WidgetDisplayPolicy.lastConsume(cached: cached > 0 ? cached : legacy, device: item, bills: rows.map(snapshot))
             }
             if let order = orders.first(where: { $0.snCode == sn }) {
                 infos[sn]?.running = true
@@ -155,7 +166,7 @@ import WidgetKit
             }
         }
         next.devices = infos.values.sorted { $0.id < $1.id }
-        next.bills = Array(billSnapshots.prefix(5))
+        next.bills = store.bills.prefix(5).map(snapshot)
         let identityChanged = previous.controlIdentity != next.controlIdentity
         // 登录会话级身份；别的设备变化/普通刷新不能作废上次设备按钮。
         next.token = previous.owner == next.owner ? previous.token : UUID().uuidString

@@ -110,9 +110,6 @@ enum SettlementEngine {
 
     // MARK: - 主路径：直接问这一单结了多少钱
 
-    /// 上一次记进日志的原始响应体。只在**变了**的时候再记，避免多轮刷屏
-    private static var lastRawLogged: String?
-
     /// `/order/consumeOrder/result/query`
     ///
     /// ⚠️ 这里故意走**原始 JSON 串**而不是 `Decodable` 模型：
@@ -127,12 +124,7 @@ enum SettlementEngine {
                 project: project,
                 tag: "consumeResult"
             )
-            let raw = String(data: data, encoding: .utf8) ?? ""
-            if raw != lastRawLogged {
-                lastRawLogged = raw
-                AppLog.shared.i("结算原始响应 consumeOrder/result/query: \(raw)")
-            }
-            return probeMoney(raw)
+            return probeMoney(String(data: data, encoding: .utf8) ?? "")
         } catch {
             return .unknown
         }
@@ -186,7 +178,7 @@ enum SettlementEngine {
                 else { continue }
                 let v = toYuan(rawValue)
                 if v > 0 {
-                    AppLog.shared.w("结算：字段名不在预期内，按名字兜底命中 `\(key)` = \(rawValue)（原始值）→ ¥\(v)")
+                    AppLog.shared.w("结算：通过备用金额字段确认 ¥\(v)")
                     return .found(v)
                 }
             }

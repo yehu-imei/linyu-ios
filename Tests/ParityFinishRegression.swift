@@ -45,14 +45,15 @@ enum ParityFinishRegression {
         BleRecoveryStore.save(candidate, defaults: defaults)
         check(BleRecoveryStore.read(owner: "A", snCode: "sn", orderNo: "order", startedAt: 100, defaults: defaults) == nil,
               "未确认的开阀候选不被恢复成活跃订单")
-        let saved = BleRecoveryStore.candidate(owner: "A", snCode: "sn", defaults: defaults)
+        let saved = BleRecoveryStore.candidate(owner: "A", authOwner: project.owner, snCode: "sn", defaults: defaults)
         check(saved?.canConfirmOpen(project: project, serverOrderNo: "order") == true,
               "候选仅用服务器返回的本人确切订单号确认")
         check(saved?.canConfirmOpen(project: project, serverOrderNo: "replacement") == false &&
             saved?.canConfirmOpen(project: project, serverOrderNo: nil) == false, "未知或替换订单不确认开阀")
         let other = ProjectAuthContext(projectId: "1", accountId: "3", owner: project.owner, generation: project.generation)
         check(saved?.canConfirmOpen(project: other, serverOrderNo: "order") == false &&
-            BleRecoveryStore.candidate(owner: "B", snCode: "sn", defaults: defaults) == nil, "候选不能跨项目账户恢复")
+            BleRecoveryStore.candidate(owner: "B", authOwner: project.owner, snCode: "sn", defaults: defaults) == nil,
+              "候选不能跨项目账户恢复")
         check(SettlementNoticePolicy.shouldCorrect(createdAt: 100, notificationCreatedAt: 100, now: 100 + 1_800_000), "30分钟内允许更正同一笔结算通知")
         check(!SettlementNoticePolicy.shouldCorrect(createdAt: 100, notificationCreatedAt: 101, now: 200), "不覆盖同设备后来的通知")
         check(!SettlementNoticePolicy.shouldCorrect(createdAt: 100, notificationCreatedAt: 100, now: 100 + 1_800_001), "超过窗口不再补通知")
@@ -60,6 +61,22 @@ enum ParityFinishRegression {
         check(TrendDisplayPolicy.plotX(index: 30, size: 31, width: 100, horizontalInset: 8) == 92, "月末趋势点保留右侧空间")
         check(TrendDisplayPolicy.axisIndices(size: 31, maxLabels: 1) == [0], "单标签横轴不除零")
         let masked = LogRedactor.mask(#"telephone=13812345678&loginCode=secret&signature=private {"password":"hidden"}"#)
-        check(!masked.contains("secret") && !masked.contains("private") && !masked.contains("hidden") && masked.contains("138****5678"), "实际日志脱敏覆盖表单JSON及手机号")
+        check(!masked.contains("secret") && !masked.contains("private") && !masked.contains("hidden") &&
+              !masked.contains("13812345678"), "实际日志脱敏覆盖表单、JSON 及手机号")
+        let identity = LogRedactor.mask(#"{"name":"测试 学生","idCardNumber":"1234512345","USERID":1234,"snCode":"设备编码","orderNo":"13200000000000000000"} accountId=998877&#"#)
+        check(!identity.contains("测试") && !identity.contains("1234512345") && !identity.contains("1234") &&
+              !identity.contains("998877") && identity.contains("设备编码") && identity.contains("13200000000000000000"),
+              "身份信息脱敏保留可用于诊断的设备号和订单号")
+        let legacy = """
+        [10-26 10:00:00.001] [I] HTTP 200 GET /account/info (1ms)
+          resp: {"newField":"不应导出的旧正文
+        这是没有字段名的历史续行
+        [10-26 10:00:00.002] [I] 结算原始响应 consumeOrder/result/query: 隐含身份信息
+        [10:00:00.003] [W] 网络暂不可用
+        """
+        check(LogRedactor.exportLines(legacy, limit: 500) == [
+            "[10-26 10:00:00.001] [I] HTTP 200 GET /account/info (1ms)",
+            "[10:00:00.003] [W] 网络暂不可用",
+        ], "运行日志导出省略旧请求正文、截断的 JSON 与历史结算原始响应")
     }
 }

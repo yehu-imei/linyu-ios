@@ -73,13 +73,20 @@ enum Prefs {
         set { d.set(newValue, forKey: "walletBalance") }
     }
     /// 手填的初始余额（拿不到任何真实余额时才用）
-    static var manualBalance: String {
-        get { d.string(forKey: "manualBalance") ?? "" }
-        set { d.set(newValue, forKey: "manualBalance") }
+    static var manualBalance: ManualBalance? {
+        guard let owner = manualBalanceOwner else { return nil }
+        return ManualBalance.read(owner: owner)
     }
-    static var manualBalanceTime: Double {
-        get { d.double(forKey: "manualBalanceTime") }
-        set { d.set(newValue, forKey: "manualBalanceTime") }
+
+    static func saveManualBalance(_ value: String, account: ProjectAuthContext) -> Bool {
+        guard SessionWork.isCurrent(account.generation), manualBalanceOwner == account.owner else { return false }
+        return ManualBalance.save(value, enteredAt: Date().timeIntervalSince1970 * 1000, owner: account.owner)
+    }
+
+    private static var manualBalanceOwner: String? {
+        let session = Session.shared
+        guard session.isLoggedIn else { return nil }
+        return ProjectAuthContext.owner(userId: session.userId, projectId: session.projectId, accountId: session.accountId)
     }
 
     // MARK: - 用户确认过「需要蓝牙」的设备
@@ -261,13 +268,11 @@ enum Prefs {
     ///
     /// ⚠️ 这里的 key 列表与 Android 一一对应，加字段时两边要一起改。
     static func clear(preserveActiveRecovery: Bool = false) {
-        let keepBalance = manualBalance
-        let keepBalanceTime = manualBalanceTime
-
         for key in [
             "boundRoom",
             "lastConsumeMoney", "lastConsumeTime",
             "campusBalance", "walletBalance", "schoolName",
+            "manualBalance", "manualBalanceTime",
             "pendingSettlements",
             "pendingStopRequest", "pendingOpenShower",
             // 设备级知识，但和账号绑定过（用户确认过「这台要蓝牙」），换号不适用
@@ -291,10 +296,6 @@ enum Prefs {
                 d.removeObject(forKey: key)
             }
         }
-
-        // 手填余额原样写回
-        manualBalance = keepBalance
-        manualBalanceTime = keepBalanceTime
 
         AppLog.shared.i("已清理账号本地数据（保留恢复态：\(preserveActiveRecovery)）")
     }
@@ -358,20 +359,18 @@ enum BalanceEstimator {
     }
 
     /// 有真实余额就直接用它；否则 = 手填初始余额 − 填完之后产生的消费
-    static func estimate(_ bills: [BillDTO]) -> Double {
+    static func estimate(_ bills: [BillDTO]) -> Double? {
         if let real = realBalance { return real }
-        let initial = Prefs.manualBalance
-        guard !initial.isEmpty, let base = Double(initial) else { return 0 }
-        let since = Prefs.manualBalanceTime
+        guard let baseline = Prefs.manualBalance else { return nil }
         let spent = bills
-            .filter { billTimeMs($0.consumeDate ?? "") > since }
+            .filter { billTimeMs($0.consumeDate ?? "") > baseline.enteredAt }
             .reduce(0.0) { $0 + ($1.yuan ?? 0) }
-        return base - spent
+        return baseline.amount - spent
     }
 
     /// 没填过初始余额、也拿不到真实余额时显示「—」，免得被当成余额为 0
-    static func format(_ balance: Double) -> String {
-        if !hasRealBalance && Prefs.manualBalance.isEmpty { return "¥ —" }
+    static func format(_ balance: Double?) -> String {
+        guard let balance else { return "¥ —" }
         return "¥ \(MoneyFormat.format(balance))"
     }
 }

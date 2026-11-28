@@ -3,31 +3,41 @@ import Foundation
 /// 恢复态按学校+账号归档。不保存凭证；未确认归属的旧记录不交给新账号。
 enum RecoveryArchive {
     private static let archiveKey = "linyu.recoveryByAccount"
+    private static let unconfirmedKey = "linyu.unconfirmedBleByOwner"
     private static let ownerKey = "linyu.recoveryOwner"
     private static let lock = NSRecursiveLock()
     private static func isRecoveryKey(_ key: String) -> Bool {
         ["activeOrders", "finishedOrderIdentities", "pendingSettlements", "bleSessionJson", "bleDevices"].contains(key)
             || key.hasPrefix("startedAt_") || key.hasPrefix("autoDiscon_") || key.hasPrefix("lastDevice")
     }
-    static func bindExisting(owner: String, defaults: UserDefaults = .standard) {
+    static func bindExisting(owner: String, authOwner: String? = nil, defaults: UserDefaults = .standard) {
         guard !owner.isEmpty else { return }
         lock.lock(); defer { lock.unlock() }
         // 仅启动时仍有有效登录凭据，才允许给旧版本数据补归属。
         if defaults.string(forKey: ownerKey) == nil { defaults.set(owner, forKey: ownerKey) }
-        else if defaults.string(forKey: ownerKey) != owner { activate(owner: owner, defaults: defaults) }
+        else if defaults.string(forKey: ownerKey) != owner { activate(owner: owner, authOwner: authOwner, defaults: defaults) }
     }
-    static func suspend(owner: String, preserve: Bool, defaults: UserDefaults = .standard) {
+    static func suspend(owner: String, preserve: Bool, authOwner: String? = nil, defaults: UserDefaults = .standard) {
         lock.lock(); defer { lock.unlock() }
         var archive = defaults.dictionary(forKey: archiveKey) ?? [:]
         if !owner.isEmpty {
+            if let authOwner {
+                var pending = defaults.dictionary(forKey: unconfirmedKey) ?? [:]
+                pending[authOwner] = BleRecoveryStore.archiveUnconfirmed(owner: owner, authOwner: authOwner, defaults: defaults)
+                defaults.set(pending, forKey: unconfirmedKey)
+            }
             if preserve {
-                archive[owner] = defaults.dictionaryRepresentation().filter { isRecoveryKey($0.key) }
+                var snapshot = defaults.dictionaryRepresentation().filter { isRecoveryKey($0.key) }
+                if authOwner != nil {
+                    snapshot[BleRecoveryStore.key] = BleRecoveryStore.excludeUnconfirmed(from: snapshot[BleRecoveryStore.key] as? String)
+                }
+                archive[owner] = snapshot
             } else { archive.removeValue(forKey: owner) }
             defaults.set(archive, forKey: archiveKey)
         }
         clearVisible(defaults)
     }
-    static func activate(owner: String, defaults: UserDefaults = .standard) {
+    static func activate(owner: String, authOwner: String? = nil, defaults: UserDefaults = .standard) {
         lock.lock(); defer { lock.unlock() }
         guard !owner.isEmpty else { return }
         if defaults.string(forKey: ownerKey) == owner { return }
@@ -44,6 +54,12 @@ enum RecoveryArchive {
         clearVisible(defaults)
         if let snapshot = defaults.dictionary(forKey: archiveKey)?[owner] as? [String: Any] {
             for (key, value) in snapshot where isRecoveryKey(key) { defaults.set(value, forKey: key) }
+        }
+        if let authOwner {
+            var pending = defaults.dictionary(forKey: unconfirmedKey) ?? [:]
+            BleRecoveryStore.restoreUnconfirmed(pending.removeValue(forKey: authOwner) as? String,
+                                                owner: owner, authOwner: authOwner, defaults: defaults)
+            defaults.set(pending, forKey: unconfirmedKey)
         }
         defaults.set(owner, forKey: ownerKey)
     }

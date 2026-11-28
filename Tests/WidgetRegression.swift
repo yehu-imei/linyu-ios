@@ -23,6 +23,25 @@ import Foundation
         snapshot.lastDevice = "A"
         snapshot.devices = [WidgetDevice(id: "A", name: "320房", detail: "热水器", emoji: "🚿"),
                             WidgetDevice(id: "B", name: "321房", detail: "热水器", emoji: "🚿", running: true, orderNo: "orderB", startedAt: 123, selectable: false)]
+        let scanTime = Date(timeIntervalSince1970: 100)
+        var previous = snapshot
+        previous.nearbyIDs = ["A"]
+        previous.nearbyDate = scanTime
+        snapshot.updateNearby(completed: nil, previous: previous, knownIDs: ["A", "B"])
+        check(snapshot.nearbyIDs == ["A"] && snapshot.nearbyDate == scanTime, "尚无成功扫描保留同账号附近设备")
+        let completion = scanTime.addingTimeInterval(5)
+        snapshot.updateNearby(completed: ([], completion), previous: previous, knownIDs: ["A", "B"])
+        check(snapshot.nearbyIDs.isEmpty && snapshot.nearbyDate == completion && snapshot.lastDevice == "A",
+              "成功扫描为空时清附近设备，保留上次设备")
+        snapshot.updateNearby(completed: (["B", "missing"], completion), previous: previous, knownIDs: ["A", "B"])
+        check(snapshot.nearbyIDs == ["B"], "只展示最新完成扫描中已知道身份的设备")
+        var switched = WidgetSnapshot(owner: "new:owner")
+        switched.updateNearby(completed: nil, previous: previous, knownIDs: ["A", "B"])
+        check(switched.nearbyIDs.isEmpty && switched.nearbyDate == nil, "换号不复用原附近设备列表")
+        snapshot.nearbyDisabled = true
+        snapshot.updateNearby(completed: (["A"], completion), previous: previous, knownIDs: ["A", "B"])
+        check(snapshot.nearbyIDs.isEmpty && snapshot.nearbyDate == nil, "禁用附近插件清除附近数据")
+        snapshot.nearbyDisabled = nil
         let start = WidgetCommand(url: WidgetCommand.url(.start, snapshot: snapshot, device: snapshot.devices[0]))!
         check(start.matches(snapshot), "组件开阀按钮保留目标身份")
         let stop = WidgetCommand(url: WidgetCommand.url(.stop, snapshot: snapshot, device: snapshot.devices[1]))!

@@ -2,6 +2,20 @@ import Foundation
 
 enum ParityBatchRegression {
     @MainActor static func run(check: (Bool, String) -> Void) async {
+        let suite = "ManualBalanceRegression.\(UUID())"
+        let balances = UserDefaults(suiteName: suite)!
+        defer { balances.removePersistentDomain(forName: suite) }
+        balances.set("99", forKey: "manualBalance")
+        check(ManualBalance.read(owner: "1:2:3", defaults: balances) == nil, "旧手填余额没有可确认归属")
+        check(ManualBalance.save("20.10", enteredAt: 123, owner: "1:2:3", defaults: balances), "保存同一条金额和时间")
+        check(ManualBalance.read(owner: "9:2:3", defaults: balances) == nil, "新用户不使用旧用户估算余额")
+        check(ManualBalance.read(owner: "1:2:4", defaults: balances) == nil, "新账户不使用旧账户估算余额")
+        check(!ManualBalance.save("nan", enteredAt: 123, owner: "1:2:3", defaults: balances), "无效值不覆盖原值")
+        let saved = ManualBalance.read(owner: "1:2:3", defaults: balances)
+        check(saved?.amount == 20.10 && saved?.enteredAt == 123, "原账号可以重新读取金额和填写时间")
+        check(ManualBalance.save("", enteredAt: 124, owner: "9:2:3", defaults: balances) &&
+              ManualBalance.read(owner: "1:2:3", defaults: balances)?.amount == saved?.amount, "清空只影响当前账户")
+
         defer { ApiClient.getResponses = [:]; ProfileCache.clear() }
         for raw in ["55460", "0", "null"] {
             ApiClient.getResponses["/account/wallet"] = "{\"success\":true,\"data\":{\"accountRealMoney\":\(raw),\"money\":\"55.460\"}}"

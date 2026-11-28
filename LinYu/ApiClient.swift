@@ -73,24 +73,14 @@ struct ApiClient {
         applyCommonHeaders(&req)
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
 
-        // 日志里不打印 loginCode：它是会令牌，进日志等于泄露会话
-        let preview = body.keys.sorted().map { key in
-            key == "loginCode" ? "\(key)=***" : "\(key)=\(body[key] ?? "")"
-        }.joined(separator: "&")
-
         let started = Date()
         do {
             let (data, resp) = try await session.data(for: req)
             try validateGeneration(generation)
             let ms = Int(Date().timeIntervalSince(started) * 1000)
             let code = (resp as? HTTPURLResponse)?.statusCode ?? -1
-            let text = String(data: data, encoding: .utf8) ?? ""
-            AppLog.shared.i(
-                "HTTP \(code) POST(json) \(path) (\(ms)ms)\(tag.map { " [\($0)]" } ?? "")",
-                "req: \(preview)\nresp: \(text.prefix(600))"
-            )
             try await validateResponse(data, status: code, path: path, authenticated: usesCurrentSession,
-                                       project: nil, generation: generation)
+                                       project: nil, generation: generation, method: "POST(json)", elapsed: ms, tag: tag)
             return data
         } catch is CancellationError {
             throw CancellationError()
@@ -98,7 +88,7 @@ struct ApiClient {
             throw error
         } catch {
             try validateGeneration(generation)
-            AppLog.shared.e("HTTP FAIL POST(json) \(path)", "\(error.localizedDescription)")
+            AppLog.shared.e("HTTP FAIL POST(json) \(path): \(LoginFeedback.message(error))")
             throw ApiError.transport(LoginFeedback.message(error))
         }
     }
@@ -132,32 +122,14 @@ struct ApiClient {
         applyCommonHeaders(&req, projectId: project?.projectId)
         req.httpBody = encodeForm(fields)
 
-        let bodyPreview = fields
-            .filter { !["loginCode", "password", "signature"].contains($0.key) }
-            .map { "\($0.key)=\($0.value)" }
-            .sorted()
-            .joined(separator: "&")
-        // 签名不进正文，但要记录长度和首 8 位，便于判断是否真的算出来了
-        let sigInfo = fields["signature"].map { "signature(len=\($0.count), head=\($0.prefix(8)))" } ?? "signature=MISSING"
-        let headerDump = (req.allHTTPHeaderFields ?? [:])
-            .map { "\($0.key)=\($0.value)" }
-            .filter { !$0.lowercased().hasPrefix("content-length") }
-            .sorted()
-            .joined(separator: " ")
-
         let started = Date()
         do {
             let (data, resp) = try await session.data(for: req)
             try validateGeneration(generation)
             let ms = Int(Date().timeIntervalSince(started) * 1000)
             let code = (resp as? HTTPURLResponse)?.statusCode ?? -1
-            let text = String(data: data, encoding: .utf8) ?? ""
-            AppLog.shared.i(
-                "HTTP \(code) POST \(path) (\(ms)ms)\(tag.map { " [\($0)]" } ?? "")",
-                "headers: \(headerDump)\n\(sigInfo)\nreq: \(bodyPreview)\nresp: \(text.prefix(600))"
-            )
             try await validateResponse(data, status: code, path: path, authenticated: usesCurrentSession,
-                                       project: project, generation: generation)
+                                        project: project, generation: generation, method: "POST", elapsed: ms, tag: tag)
             return data
         } catch is CancellationError {
             throw CancellationError()
@@ -165,7 +137,7 @@ struct ApiClient {
             throw error
         } catch {
             try validateGeneration(generation)
-            AppLog.shared.e("HTTP FAIL POST \(path)", "\(error.localizedDescription)")
+            AppLog.shared.e("HTTP FAIL POST \(path): \(LoginFeedback.message(error))")
             throw ApiError.transport(LoginFeedback.message(error))
         }
     }
@@ -206,13 +178,8 @@ struct ApiClient {
             try validateGeneration(generation)
             let ms = Int(Date().timeIntervalSince(started) * 1000)
             let code = (resp as? HTTPURLResponse)?.statusCode ?? -1
-            let text = String(data: data, encoding: .utf8) ?? ""
-            AppLog.shared.i(
-                "HTTP \(code) GET \(path) (\(ms)ms)\(tag.map { " [\($0)]" } ?? "")",
-                "resp: \(text.prefix(400))"
-            )
             try await validateResponse(data, status: code, path: path, authenticated: usesCurrentSession,
-                                       project: project, generation: generation)
+                                        project: project, generation: generation, method: "GET", elapsed: ms, tag: tag)
             return data
         } catch is CancellationError {
             throw CancellationError()
@@ -220,7 +187,7 @@ struct ApiClient {
             throw error
         } catch {
             try validateGeneration(generation)
-            AppLog.shared.e("HTTP FAIL GET \(path)", "\(error.localizedDescription)")
+            AppLog.shared.e("HTTP FAIL GET \(path): \(LoginFeedback.message(error))")
             throw ApiError.transport(LoginFeedback.message(error))
         }
     }
@@ -240,8 +207,13 @@ struct ApiClient {
     }
 
     private static func validateResponse(
-        _ data: Data, status: Int, path: String, authenticated: Bool, project: ProjectAuthContext?, generation: UUID
+        _ data: Data, status: Int, path: String, authenticated: Bool, project: ProjectAuthContext?, generation: UUID,
+        method: String, elapsed: Int, tag: String?
     ) async throws {
+        let response = try? JSONDecoder().decode(SessionFailureResponse.self, from: data)
+        let errorCode = response?.errorCode?.value
+        let outcome = errorCode.map { "，业务码 \($0)" } ?? ""
+        AppLog.shared.i("HTTP \(status) \(method) \(path) (\(elapsed)ms)\(tag.map { " [\($0)]" } ?? "")\(outcome)")
         let isUnauthorized = status == 401 || status == 403
         let isSuccessStatus = (200..<300).contains(status)
         if authenticated && (isUnauthorized || isSuccessStatus) {
@@ -249,9 +221,7 @@ struct ApiClient {
                 let fields = Session.shared.authFields
                 return $0.projectId == fields["projectId"] && $0.accountId == fields["accountId"]
             } ?? true
-            let response = try? JSONDecoder().decode(SessionFailureResponse.self, from: data)
             // 保留钱包心跳对 HTTP 200 响应内 401 / 403 的识别。
-            let errorCode = response?.errorCode?.value
             let walletSessionRejected = path == "/account/wallet" && response?.success == false &&
                 (errorCode == 401 || errorCode == 403)
             // 单个关联项目的 401/403 也可能只是该项目无权限，需有明确的登录失效文案。

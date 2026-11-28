@@ -157,9 +157,16 @@ struct DiscoveredPeripheral: Identifiable, Equatable {
 /// **在 12 台同型号设备中，iOS 能不能区分出目标那一台？**
 final class BLEScanner: NSObject, ObservableObject {
 
+    struct CompletedScan {
+        let id: UUID
+        let devices: [DiscoveredPeripheral]
+        let completedAt: Date
+    }
+
     @Published private(set) var devices: [DiscoveredPeripheral] = []
     @Published private(set) var stateText: String = "未开始"
     @Published private(set) var isScanning: Bool = false
+    @Published private(set) var completedNearbyScan: CompletedScan?
     /// 累计收到多少次广播回调（用于判断"扫不到"是真没有还是回调没来）
     @Published private(set) var callbackCount: Int = 0
 
@@ -372,8 +379,7 @@ final class BLEScanner: NSObject, ObservableObject {
             return
         }
         if isScanning {
-            central.stopScan()
-            isScanning = false
+            stop()
             stateText = "已暂停扫描（正在连接）"
         }
         gattLog.removeAll()
@@ -448,6 +454,7 @@ final class BLEScanner: NSObject, ObservableObject {
     /// **5 秒足够扫全**，再久只是让用户干等、还更费电。
     /// 之前 iOS 这边没有超时，会一直扫下去——列表不停变动，用户永远等不到「扫完了」。
     static let scanDuration: TimeInterval = 5
+    private var scanID: UUID?
 
     func start() {
         devices.removeAll()
@@ -466,6 +473,7 @@ final class BLEScanner: NSObject, ObservableObject {
     func stop() {
         scanTimer?.invalidate()
         scanTimer = nil
+        scanID = nil
         guard let central, central.state == .poweredOn else {
             isScanning = false
             return
@@ -477,9 +485,10 @@ final class BLEScanner: NSObject, ObservableObject {
 
     /// 5 秒后自动停，并排一次序
     private func scheduleAutoStop() {
+        guard let scanID else { return }
         scanTimer?.invalidate()
         scanTimer = Timer.scheduledTimer(withTimeInterval: Self.scanDuration, repeats: false) { [weak self] _ in
-            Task { @MainActor in self?.finishScan() }
+            Task { @MainActor in self?.finishScan(id: scanID) }
         }
     }
 
@@ -488,17 +497,16 @@ final class BLEScanner: NSObject, ObservableObject {
     /// ⚠️ 排序只在**结束后做一次**，不能实时排：扫描过程中 RSSI 一直小幅波动，
     /// 实时重排会让列表不停跳动，用户正要点的那台被挪走 → 点错设备。
     /// 在澡堂里点错意味着替别人付了水费（Android 注释里专门写了这条）。
-    private func finishScan() {
-        scanTimer?.invalidate()
+    private func finishScan(id: UUID) {
+        guard scanID == id, isScanning else { return }
+        guard let central, central.state == .poweredOn else { stop(); return }
+        central.stopScan()
         scanTimer = nil
-        guard isScanning else { return }
-
-        if let central, central.state == .poweredOn {
-            central.stopScan()
-        }
-        isScanning = false
+        scanID = nil
         // 按 RSSI 降序：排最前面的就是离手机最近的那台，通常正是用户面前这个位置
         devices = devices.sorted { $0.rssi > $1.rssi }
+        completedNearbyScan = CompletedScan(id: id, devices: devices, completedAt: Date())
+        isScanning = false
         stateText = devices.isEmpty ? "扫描完成，未发现设备" : "扫描完成（\(devices.count) 台）"
         AppLog.shared.i("BLE 扫描完成：\(devices.count) 台（已按信号强度排序）")
     }
@@ -506,6 +514,7 @@ final class BLEScanner: NSObject, ObservableObject {
     // MARK: - 私有
 
     private func beginScan(_ central: CBCentralManager) {
+        scanID = UUID()
         // 允许重复回调：否则同一台设备只会出现一次，RSSI 不会更新
         central.scanForPeripherals(
             withServices: nil,
@@ -533,6 +542,7 @@ final class BLEScanner: NSObject, ObservableObject {
 extension BLEScanner: CBCentralManagerDelegate {
 
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
+        if central.state != .poweredOn, isScanning { stop() }
         stateText = describe(central.state)
         // 进页面自动扫一次：这个页面的用途就是"到了澡堂立刻看数据"，
         // 多一步点击反而容易让人忘了点。只自动一次，之后完全由用户控制。
@@ -588,7 +598,9 @@ extension BLEScanner: CBCentralManagerDelegate {
         didDiscover peripheral: CBPeripheral,
         advertisementData: [String: Any],
         rssi RSSI: NSNumber
-    ) {        callbackCount += 1
+    ) {
+        guard isScanning, central === self.central else { return }
+        callbackCount += 1
 
         let adv = advertisementData
         let localName = adv[CBAdvertisementDataLocalNameKey] as? String

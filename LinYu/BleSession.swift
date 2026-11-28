@@ -205,7 +205,7 @@ final class BleSession: NSObject, ObservableObject {
             return false
         }
         let ok = payload.first == Self.ackOK
-        AppLog.shared.i("0x21 下发费率\(ok ? "成功" : "失败")：\(BleFrame.toHexSpaced(payload))")
+        AppLog.shared.i("0x21 下发费率\(ok ? "成功" : "失败")（\(payload.count)B）")
         return ok
     }
 
@@ -235,15 +235,15 @@ final class BleSession: NSObject, ObservableObject {
             return .noReply
         }
         if payload.first == Self.ackOK {
-            AppLog.shared.i("0x22 关阀成功：\(BleFrame.toHexSpaced(payload))")
+            AppLog.shared.i("0x22 关阀成功（\(payload.count)B）")
             return .ok
         }
         // `81 01` = 设备已处于关闭状态（重复关阀时会出现）
         if payload.first == 0x81 {
-            AppLog.shared.i("0x22 设备已是关闭状态：\(BleFrame.toHexSpaced(payload))")
+            AppLog.shared.i("0x22 设备已是关闭状态（\(payload.count)B）")
             return .alreadyClosed
         }
-        AppLog.shared.w("0x22 关阀失败：\(BleFrame.toHexSpaced(payload))")
+        AppLog.shared.w("0x22 关阀失败（\(payload.count)B）")
         return .noReply
     }
 
@@ -280,8 +280,7 @@ final class BleSession: NSObject, ObservableObject {
         defer { earlyReply.finish(request) }
         let generation = callbackGuard.generation
         let wire = BleFrame.cmdToWire(cmd: cmd, data: data)
-        AppLog.shared.i("→ BLE 发 0x\(String(cmd, radix: 16))（\(wire.count)B）",
-                        BleFrame.toHex(wire))
+        AppLog.shared.i("→ BLE 发 0x\(String(cmd, radix: 16))（\(wire.count)B）")
 
         guard await writeChunks(wire) else {
             AppLog.shared.w("0x\(String(cmd, radix: 16)) 写入失败")
@@ -371,13 +370,12 @@ final class BleSession: NSObject, ObservableObject {
 
         for f in frames {
             guard let frame = BleFrame.parseWire(f) else {
-                AppLog.shared.w("收帧非法（CRC/格式）：\(BleFrame.toHex(f))")
+                AppLog.shared.w("收帧非法（CRC/格式，\(f.count)B）")
                 continue
             }
             let cmd = BleFrame.cmdOf(frame)
             let payload = BleFrame.payloadOf(frame) ?? []
-            AppLog.shared.i("← BLE 收 0x\(String(cmd, radix: 16))（\(payload.count)B）",
-                            BleFrame.toHexSpaced(payload))
+            AppLog.shared.i("← BLE 收 0x\(String(cmd, radix: 16))（\(payload.count)B）")
 
             if let waiter = replyWaiters.removeValue(forKey: cmd) {
                 replyTokens[cmd] = nil
@@ -438,13 +436,6 @@ final class BleSession: NSObject, ObservableObject {
         }
     }
 
-    /// 只做格式校验，iOS 上不能用 MAC 直接连
-    private static func normalizeMac(_ raw: String) -> String? {
-        let plain = raw.replacingOccurrences(of: ":", with: "")
-            .replacingOccurrences(of: "-", with: "")
-            .uppercased()
-        return plain.count == 12 ? plain : nil
-    }
 }
 
 // MARK: - 由 BLEScanner 转发的连接事件

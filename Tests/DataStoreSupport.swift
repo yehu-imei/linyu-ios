@@ -57,6 +57,7 @@ enum ApiClient {
     static var failPost = false
     static var onPost: (() -> Void)?
     static var onGet: ((String) -> Void)?
+    static var beforeReturningBill: (@MainActor (String) async -> Void)?
     @MainActor static func get(
         _ path: String, query: [String: String] = [:], project: ProjectAuthContext? = nil, tag: String? = nil
     ) async throws -> Data {
@@ -83,7 +84,9 @@ enum ApiClient {
             let data: String = emptyBills ? "[]" : """
                 [{"consumeBillDTO":{"orderId":"\(month)","consumeDate":"\(month)-10 12:00:00","consumeMoney":"2.00"}}]
                 """
-            return Data("{\"success\":true,\"data\":\(data)}".utf8)
+            let response = Data("{\"success\":true,\"data\":\(data)}".utf8)
+            if let beforeReturningBill { await beforeReturningBill(month) }
+            return response
         }
         return Data("{\"success\":true,\"data\":null}".utf8)
     }

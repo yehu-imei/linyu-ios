@@ -48,6 +48,20 @@ struct WidgetSnapshot: Codable, Equatable {
     var emptyTitle: String { message == nil ? "未登录" : "等待同步" }
     var showsNearby: Bool { nearbyDisabled != true }
 
+    mutating func updateNearby(completed: (ids: [String], at: Date)?, previous: WidgetSnapshot,
+                               knownIDs: Set<String>) {
+        if !showsNearby {
+            nearbyIDs = []
+            nearbyDate = nil
+        } else if let completed {
+            nearbyIDs = completed.ids.filter(knownIDs.contains)
+            nearbyDate = completed.at
+        } else if previous.owner == owner {
+            nearbyIDs = previous.nearbyIDs.filter(knownIDs.contains)
+            nearbyDate = previous.nearbyDate
+        }
+    }
+
     func visibleTab(_ tab: Int) -> Int {
         tab == 1 && !showsNearby ? 0 : tab
     }

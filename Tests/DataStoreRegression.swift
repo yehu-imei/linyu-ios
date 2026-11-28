@@ -59,6 +59,39 @@ struct DataStoreRegression {
               "partial bill response combines successful months with cache for the failed month")
         ApiClient.failingMonth = nil
 
+        let previouslyLoadedMonth = formatter.string(from: Calendar(identifier: .gregorian).date(byAdding: .month, value: -1, to: Date())!)
+        ApiClient.emptyBills = true
+        ApiClient.billQueries = []
+        var waitingMonth: CheckedContinuation<Void, Never>?
+        var isFirstLoad = true
+        ApiClient.beforeReturningBill = { month in
+            if isFirstLoad, month == previouslyLoadedMonth {
+                isFirstLoad = false
+                await withCheckedContinuation { waitingMonth = $0 }
+            }
+        }
+        let settlementStore = AppDataStore()
+        let agingRead = Task { await settlementStore.reload() }
+        while waitingMonth == nil || ApiClient.billQueries.count < 3 { await Task.yield() }
+        ApiClient.emptyBills = false
+        var enqueued = 0
+        let firstSettlement = Task {
+            enqueued += 1
+            await settlementStore.reload(afterCurrent: true)
+        }
+        let secondSettlement = Task {
+            enqueued += 1
+            await settlementStore.reload(afterCurrent: true)
+        }
+        while enqueued < 2 { await Task.yield() }
+        waitingMonth?.resume()
+        await agingRead.value
+        await firstSettlement.value
+        await secondSettlement.value
+        check(ApiClient.billQueries.count == 6 && settlementStore.bills.count == 3,
+              "结算期间的并发刷新在旧账单请求结束后只补一轮")
+        ApiClient.beforeReturningBill = nil
+
         Session.shared.requestGeneration = UUID()
         ApiClient.getResponses["/user/project/list"] = #"{"success":true,"data":[{"projectId":902,"accountId":102},{"projectId":903,"accountId":103,"userId":222}]}"#
         ApiClient.billResponsesByProject["902"] = #"{"success":true,"data":[{"consumeBillDTO":{"orderId":"shared","deviceDescription":"温水机-A号","dealDate":"2026-11-10T12:00:00","consumeMoney":"0","thirdTradeMoney":"0.123"}},{"rechargeBillDTO":{"orderId":"add"},"consumeBillDTO":{"orderId":"add","consumeDate":"2026-11-10 12:00:01","consumeMoney":"1.0"}}]}"#

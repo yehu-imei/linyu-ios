@@ -61,7 +61,14 @@ final class Session: ObservableObject {
         displayName: String? = nil
     ) {
         advanceGeneration()
-        RecoveryArchive.activate(owner: projectId + ":" + accountId)
+        let accountKey = projectId + ":" + accountId
+        let authOwner = ProjectAuthContext.owner(userId: userId, projectId: projectId, accountId: accountId)
+        let previous = ProjectAuthContext.owner(userId: self.userId, projectId: self.projectId, accountId: self.accountId)
+        if isLoggedIn, previous != authOwner {
+            let previousAccountKey = self.projectId + ":" + self.accountId
+            RecoveryArchive.suspend(owner: previousAccountKey, preserve: previousAccountKey != accountKey, authOwner: previous)
+        }
+        RecoveryArchive.activate(owner: accountKey, authOwner: authOwner)
         self.loginCode = loginCode
         self.userId = userId
         self.accountId = accountId
@@ -93,7 +100,8 @@ final class Session: ObservableObject {
 
     func logout(preserveActiveRecovery: Bool = false) {
         advanceGeneration()
-        RecoveryArchive.suspend(owner: projectId + ":" + accountId, preserve: preserveActiveRecovery)
+        let owner = ProjectAuthContext.owner(userId: userId, projectId: projectId, accountId: accountId)
+        RecoveryArchive.suspend(owner: projectId + ":" + accountId, preserve: preserveActiveRecovery, authOwner: owner)
         ProfileCache.clear()
         loginCode = ""
         userId = ""
@@ -153,7 +161,8 @@ final class Session: ObservableObject {
         telephone = get("telephone") ?? ""
         displayName = get("displayName") ?? ""
         if !loginCode.isEmpty {
-            RecoveryArchive.bindExisting(owner: projectId + ":" + accountId)
+            let owner = ProjectAuthContext.owner(userId: userId, projectId: projectId, accountId: accountId)
+            RecoveryArchive.bindExisting(owner: projectId + ":" + accountId, authOwner: owner)
             AppLog.shared.i("已恢复登录态：projectId=\(projectId)")
         }
     }

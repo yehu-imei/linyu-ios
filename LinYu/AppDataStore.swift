@@ -60,6 +60,7 @@ final class AppDataStore: ObservableObject {
         return useCodeQuotaExhausted ? "今日换码次数已用完，请明天再来" : nil
     }
     private var billsTask: Task<Void, Never>?
+    private var needsFollowUpBills = false
     private var profileRefreshed = false
     private var billsRefreshed = false
     var onBillsLoaded: (([BillDTO]) -> Void)?
@@ -274,37 +275,53 @@ final class AppDataStore: ObservableObject {
     }
 
     /// 显式刷新（下拉 / 结算完成后刷新账单）
-    func reload() async {
+    func reload(afterCurrent: Bool = false) async {
         guard sessionIsCurrent else { return }
-        if let billsTask { await billsTask.value; return }
+        if let billsTask {
+            if afterCurrent { needsFollowUpBills = true }
+            await billsTask.value
+            return
+        }
         loading = true
         let task = Task { @MainActor in
-            defer { self.loading = false; self.billsTask = nil }
-            self.billsError = nil
-            await BillService.refreshBalances()
-            guard self.sessionIsCurrent else { return }
-            do {
-                let result = try await BillService.loadMergedHistory(legacyDefault: self.balanceBillsLoaded ? self.balanceBills : nil)
-                try Task.checkCancellation()
-                guard self.sessionIsCurrent else { return }
-                self.bills = result.bills
-                self.balanceBills = result.defaultBills
-                self.loaded = result.hasDefault || !result.bills.isEmpty
-                self.balanceBillsLoaded = result.hasDefault
-                self.billsRefreshed = !result.hadFailure
-                if result.hasDefault { BillHistoryCache.save(result.defaultBills, owner: self.profileOwner) }
-                if result.hadFailure {
-                    self.billsError = self.bills.isEmpty ? "获取账单失败，请重试" : "部分账单暂未更新，点此重试"
-                }
-                self.onBillsLoaded?(result.fresh)
-            } catch {
-                guard self.sessionIsCurrent else { return }
-                self.billsError = "获取账单失败，请重试"
-                AppLog.shared.w("账单刷新失败，保留已有数据：\(error.localizedDescription)")
+            defer {
+                self.needsFollowUpBills = false
+                self.loading = false
+                self.billsTask = nil
+            }
+            while self.sessionIsCurrent, !Task.isCancelled {
+                self.needsFollowUpBills = false
+                await self.refreshBills()
+                guard self.needsFollowUpBills else { break }
             }
         }
         billsTask = task
         await task.value
+    }
+
+    private func refreshBills() async {
+        billsError = nil
+        await BillService.refreshBalances()
+        guard sessionIsCurrent else { return }
+        do {
+            let result = try await BillService.loadMergedHistory(legacyDefault: balanceBillsLoaded ? balanceBills : nil)
+            try Task.checkCancellation()
+            guard sessionIsCurrent else { return }
+            bills = result.bills
+            balanceBills = result.defaultBills
+            loaded = result.hasDefault || !result.bills.isEmpty
+            balanceBillsLoaded = result.hasDefault
+            billsRefreshed = !result.hadFailure
+            if result.hasDefault { BillHistoryCache.save(result.defaultBills, owner: profileOwner) }
+            if result.hadFailure {
+                billsError = bills.isEmpty ? "获取账单失败，请重试" : "部分账单暂未更新，点此重试"
+            }
+            onBillsLoaded?(result.fresh)
+        } catch {
+            guard sessionIsCurrent else { return }
+            billsError = "获取账单失败，请重试"
+            AppLog.shared.w("账单刷新失败，保留已有数据：\(error.localizedDescription)")
+        }
     }
 
     func cancelRequests() {

@@ -133,8 +133,7 @@ final class AppLog: ObservableObject {
         let history = queue.sync {
             (try? String(contentsOf: fileURL, encoding: .utf8)) ?? ""
         }
-        var recent = history.split(separator: "\n", omittingEmptySubsequences: false)
-        if recent.last == "" { recent.removeLast() }
+        var recent = LogRedactor.exportLines(history, limit: 500)
         if recent.isEmpty {
             let memory = lines.map { line in
                 var text = "[\(line.timeText)] [\(line.level.rawValue)] \(line.message)"
@@ -143,11 +142,10 @@ final class AppLog: ObservableObject {
                 }
                 return text
             }.joined(separator: "\n")
-            recent = memory.split(separator: "\n", omittingEmptySubsequences: false)
-            if recent.last == "" { recent.removeLast() }
+            recent = LogRedactor.exportLines(memory, limit: 500)
         }
         guard !recent.isEmpty else { w("没有可导出的日志"); return nil }
-        let text = header(note: note) + "\n" + recent.suffix(500).joined(separator: "\n") + "\n"
+        let text = header(note: note.map(Self.mask)) + "\n" + recent.joined(separator: "\n") + "\n"
 
         do {
             try text.write(to: url, atomically: true, encoding: .utf8)

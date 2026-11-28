@@ -16,12 +16,14 @@ struct WalletScreenView: View {
     /// 未支付账单 + 代扣（对照 Android 的 MainViewModel 同名部分）
     @ObservedObject var deduct: DeductService
     let trendPluginInstalled: Bool
+    let onManualBalanceChanged: () -> Void
 
     @State private var detailBill: BillDTO?
     /// 待确认的代扣账单。这是动钱的操作，不弹确认框直接扣太莽了
     @State private var pendingDeduct: BillDTO?
     @State private var showEditDialog = false
     @State private var editValue = ""
+    @State private var editAccount: ProjectAuthContext?
     @State private var trendEnabled = Prefs.trendEnabled
     @State private var showWalletBalance = false
 
@@ -32,7 +34,7 @@ struct WalletScreenView: View {
     private var selectedBalance: Double? { showWalletBalance ? BalanceEstimator.walletYuan : BalanceEstimator.campusYuan }
     private var canEstimate: Bool { !showWalletBalance && !BalanceEstimator.hasRealBalance }
     private var estimate: Double? {
-        guard canEstimate, store.balanceBillsLoaded, !Prefs.manualBalance.isEmpty else { return nil }
+        guard canEstimate, store.balanceBillsLoaded else { return nil }
         return BalanceEstimator.estimate(store.balanceBills)
     }
     private var displayBalance: Double? { selectedBalance ?? estimate }
@@ -185,9 +187,11 @@ struct WalletScreenView: View {
                     alipayRechargeButton
                 } else if canEstimate {
                     Button {
+                        guard let account = try? ProjectAuthRepository.defaultContext() else { return }
                         // 预填**当前显示的余额**，不是上次填的初始值
                         editValue = displayBalance.map { MoneyFormat.format($0) }
-                            ?? (Prefs.manualBalance.isEmpty ? "0" : Prefs.manualBalance)
+                            ?? Prefs.manualBalance.map { MoneyFormat.format($0.amount) } ?? "0"
+                        editAccount = account
                         showEditDialog = true
                     } label: {
                         Text("手动填写")
@@ -330,10 +334,16 @@ struct WalletScreenView: View {
             } actions: {
                 DialogTextButton(title: "取消", color: colors.accent) { showEditDialog = false }
                 DialogFilledButton(title: "保存", color: colors.accent) {
-                    Prefs.manualBalance = editValue
-                    Prefs.manualBalanceTime = Date().timeIntervalSince1970 * 1000
+                    guard let editAccount, Prefs.saveManualBalance(editValue, account: editAccount) else {
+                        flow.toast = "无法保存余额，请重新打开后重试"
+                        showEditDialog = false
+                        return
+                    }
                     showEditDialog = false
+                    onManualBalanceChanged()
                 }
+                .disabled(editValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false &&
+                          Double(editValue.trimmingCharacters(in: .whitespacesAndNewlines))?.isFinite != true)
             }
         }
     }

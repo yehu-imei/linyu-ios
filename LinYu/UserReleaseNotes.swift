@@ -50,11 +50,6 @@ enum UserReleaseNotes {
         flush()
         return result.sorted { $0.version.compare($1.version, options: .numeric) == .orderedDescending }
     }
-    static func merge(preferred: [UserReleaseNote], fallback: [UserReleaseNote]) -> [UserReleaseNote] {
-        var versions = Dictionary(fallback.map { ($0.version, $0) }, uniquingKeysWith: { first, _ in first })
-        for item in preferred { versions[item.version] = item }
-        return versions.values.sorted { $0.version.compare($1.version, options: .numeric) == .orderedDescending }
-    }
     static var bundled: [UserReleaseNote] {
         guard let url = Bundle.main.url(forResource: "APP_CHANGELOG", withExtension: "md"),
               let text = try? String(contentsOf: url, encoding: .utf8) else { return [] }

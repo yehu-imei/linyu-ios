@@ -19,8 +19,6 @@ import Foundation
         let sample = "<!-- linyu-release-notes:1 -->\n## v3.2.0 | 2026-11-05\n- 改善体验\n- 兼容新设备\n- [iOS] 精简提示\n## v3.3.0 | 待发布\n- 未发布\n"
         check(UserReleaseNotes.parse(sample).first?.items.count == 3, "普通优化与兼容条目完整保留，不靠新增修复关键词")
         check(UserReleaseNotes.parse("<html>error</html>").isEmpty, "远程错误页面不能覆盖离线日志")
-        check(UserReleaseNotes.merge(preferred: [], fallback: notes) == notes, "失败刷新保留离线日志")
-        check(UserReleaseNotes.merge(preferred: UserReleaseNotes.parse(sample), fallback: notes).count == notes.count + 1, "新增远程版本不丢失旧版本")
         check(!UserReleaseNotes.parse(sample).contains { $0.version == "v3.3.0" }, "样例中的待发布版本仍被排除")
         let crlf = doc.replacingOccurrences(of: "\n", with: "\r\n")
         check(UserReleaseNotes.parse(crlf) == notes, "Windows 换行不影响日志读取")
