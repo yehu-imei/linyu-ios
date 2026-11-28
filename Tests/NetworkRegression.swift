@@ -24,7 +24,7 @@ final class AppLog {
     static let shared = AppLog()
     func i(_ text: String, _ detail: String? = nil) {}
     func w(_ text: String) {}
-    func e(_ text: String, _ detail: String?) {}
+    func e(_ text: String, _ detail: String? = nil) {}
 }
 final class MockProtocol: URLProtocol {
     static var status = 200
