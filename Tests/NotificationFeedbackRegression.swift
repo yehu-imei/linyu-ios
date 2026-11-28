@@ -2,15 +2,26 @@ import Foundation
 
 enum NotificationFeedbackRegression {
     @MainActor static func run(check: (Bool, String) -> Void) async {
-        for kind in [NotificationKind.inUse, .finished, .autoClosed, .closeProblem, .occupied, .openFailed] {
-            check(!kind.enabled(master: false, inUse: true, finished: true, autoClose: true), "总开关禁止\(kind.rawValue)")
+        let notificationSuite = "linyu.notification-tests." + UUID().uuidString
+        if let defaults = UserDefaults(suiteName: notificationSuite) {
+            defer { defaults.removePersistentDomain(forName: notificationSuite) }
+            let legacy = ["notifyInUse": false, "notifyFinished": false, "notifyAutoClose": false, "notifyAlert": true]
+            for (key, value) in legacy { defaults.set(value, forKey: key) }
+            defaults.set(false, forKey: "notifyEnabled")
+            defaults.set(true, forKey: "trendEnabled")
+            NotificationPolicy.removeLegacyPreferences(defaults: defaults)
+            check(legacy.keys.allSatisfy { defaults.object(forKey: $0) == nil }, "升级移除旧的通知分类与横幅偏好")
+            check(defaults.object(forKey: "notifyEnabled") as? Bool == false &&
+                  defaults.object(forKey: "trendEnabled") as? Bool == true, "清理不改通知总开关或其他偏好")
+            defaults.set(true, forKey: "notifyEnabled")
+            NotificationPolicy.removeLegacyPreferences(defaults: defaults)
+            check(defaults.object(forKey: "notifyEnabled") as? Bool == true, "再次启动保留已开启的通知总开关")
+        } else {
+            check(false, "建立独立通知偏好测试数据")
         }
-        check(!NotificationKind.inUse.enabled(master: true, inUse: false, finished: true, autoClose: true), "状态通知独立关闭")
-        check(NotificationKind.autoClosed.enabled(master: true, inUse: false, finished: false, autoClose: true), "关闭结束通知不影响自动关停")
-        check(!NotificationKind.closeProblem.enabled(master: true, inUse: true, finished: false, autoClose: true), "关阀失败跟随安卓结束通知开关")
-        check(NotificationKind.openFailed.enabled(master: true, inUse: false, finished: false, autoClose: false), "失败通知不被其他分类开关误拦")
-        check(NotificationKind.finished.destination == 1 && NotificationKind.autoClosed.destination == 1 && NotificationKind.occupied.destination == 0, "结束去账单、占用去首页")
-        check(!NotificationKind.inUse.urgent && !NotificationKind.finished.urgent && NotificationKind.openFailed.urgent, "计时静默、开阀失败使用提醒策略")
+        check(NotificationKind.finished.destination == 1 && NotificationKind.autoClosed.destination == 1 &&
+              NotificationKind.occupied.destination == 0 && NotificationKind.openFailed.destination == 0 &&
+              NotificationKind.closeProblem.destination == 0, "结算去账单，设备占用和开关阀失败去首页")
         defer { ApiClient.getResponses = [:]; ApiClient.postResponse = #"{"success":true,"data":null}"# }
         let owner = "quota-test:" + UUID().uuidString
         defer { UserDefaults.standard.removeObject(forKey: "useCodeQuota_" + owner) }

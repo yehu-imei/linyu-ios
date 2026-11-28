@@ -698,7 +698,6 @@ private struct PluginLoadingBar: View {
                 let width = geometry.size.width
                 let elapsed = frame.date.timeIntervalSinceReferenceDate / 1.8
                 let phase = CGFloat(elapsed.truncatingRemainder(dividingBy: 1))
-                let secondPhase = (phase + 0.5).truncatingRemainder(dividingBy: 1)
 
                 ZStack(alignment: .leading) {
                     Capsule().fill(tint.opacity(0.18))
@@ -706,12 +705,6 @@ private struct PluginLoadingBar: View {
                         .fill(tint)
                         .frame(width: width * 0.34)
                         .offset(x: width * (reduceMotion ? 0.33 : phase * 1.34 - 0.34))
-                    if !reduceMotion {
-                        Capsule()
-                            .fill(tint)
-                            .frame(width: width * 0.18)
-                            .offset(x: width * (secondPhase * 1.18 - 0.18))
-                    }
                 }
                 .clipShape(Capsule())
             }

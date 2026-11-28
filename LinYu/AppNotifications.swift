@@ -19,6 +19,7 @@ final class AppNotifications: NSObject, ObservableObject, UNUserNotificationCent
     static let inUseCategory = "LINYU_IN_USE"
 
     func configure() {
+        NotificationPolicy.removeLegacyPreferences()
         center.delegate = self
         // 旧版通知没有目标身份，不能保留可误导的停止入口。
         center.removePendingNotificationRequests(withIdentifiers: ["linyu.inUse", "linyu.finished"])
@@ -42,7 +43,7 @@ final class AppNotifications: NSObject, ObservableObject, UNUserNotificationCent
 
     /// 开阀成功后挂一条「使用中」通知（对照 Android `Notifier.notifyInUse`）
     func inUse(device: String, snCode: String, orderNo: String, startedAt: Int64) {
-        guard Prefs.notifyEnabled, Prefs.notifyInUse else { return }
+        guard Prefs.notifyEnabled else { return }
         let name = device.count > 14 ? "…" + String(device.suffix(13)) : device
         let content = UNMutableNotificationContent()
         content.title = "正在使用 · " + name
@@ -146,7 +147,7 @@ final class AppNotifications: NSObject, ObservableObject, UNUserNotificationCent
     }
     func finished(order: PendingSettlement, amount: Double?, automatic: Bool) {
         // 使用中通知在确认关阀时撤销，不能等异步结算返回再删：同设备可能已开新单。
-        guard Prefs.notifyEnabled, automatic ? Prefs.notifyAutoClose : Prefs.notifyFinished else { return }
+        guard Prefs.notifyEnabled else { return }
         let device = order.deviceName
         let snCode = order.snCode
         let elapsed = order.elapsedSec
@@ -155,61 +156,37 @@ final class AppNotifications: NSObject, ObservableObject, UNUserNotificationCent
         content.title = (automatic ? "设备已自动关停 · " : "使用结束 · ") + name
         content.threadIdentifier = "linyu.finished." + Self.accountKey
         content.userInfo["accountKey"] = Self.accountKey
-        content.userInfo["automatic"] = automatic
         content.userInfo["kind"] = (automatic ? NotificationKind.autoClosed : .finished).rawValue
         if PendingSettlementStore.all().contains(where: { $0.isSameOrder(as: order) }) {
             content.userInfo["pendingCreatedAt"] = String(order.createdAt)
         }
         let duration = elapsed < 60 ? "\(elapsed)秒" : "\(elapsed / 60)分\(elapsed % 60)秒"
         content.body = "用时 \(duration) · " + (amount.map { $0 > 0 ? "消费 \(MoneyFormat.withSymbol($0))" : "无消费" } ?? "结算中")
-        if automatic && Prefs.notifyAlert { content.sound = .default }
-        content.interruptionLevel = automatic && Prefs.notifyAlert ? .active : .passive
+        content.interruptionLevel = .passive
         submit(UNNotificationRequest(identifier: DeviceNotificationTarget.notificationID(snCode: snCode, finished: true), content: content, trigger: nil))
     }
     func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
-        let kind = (notification.request.content.userInfo["kind"] as? String).flatMap(NotificationKind.init(rawValue:))
-        guard kind.map(isEnabled) ?? Prefs.notifyEnabled else { completionHandler([]); return }
-        if notification.request.content.userInfo["quietUpdate"] as? Bool == true {
-            completionHandler([.list]); return
-        }
-        completionHandler(kind?.urgent == true && Prefs.notifyAlert ? [.banner, .list, .sound] : [.list])
+        completionHandler(Prefs.notifyEnabled ? [.list] : [])
     }
 
     /// Android showCloseUnconfirmed/showCloseFailed；不移除使用中通知或停止入口。
     func closeProblem(device: String, snCode: String, reason: String? = nil) {
-        guard Prefs.notifyEnabled, Prefs.notifyFinished else { return }
+        guard Prefs.notifyEnabled else { return }
         let name = device.count > 14 ? "…" + String(device.suffix(13)) : device
         let content = UNMutableNotificationContent()
         content.title = (reason == nil ? "关阀状态未确认 · " : "关阀失败 · ") + name
         content.body = "关闭结果未确认，设备可能仍在出水，请检查设备后重试"
         content.threadIdentifier = "linyu.finished." + Self.accountKey
         content.userInfo = ["accountKey": Self.accountKey, "kind": NotificationKind.closeProblem.rawValue]
-        if Prefs.notifyAlert { content.sound = .default }
-        content.interruptionLevel = Prefs.notifyAlert ? .active : .passive
+        content.interruptionLevel = .passive
         submit(UNNotificationRequest(identifier: DeviceNotificationTarget.notificationID(snCode: snCode, finished: true), content: content, trigger: nil))
-    }
-
-    private func isEnabled(_ kind: NotificationKind) -> Bool {
-        kind.enabled(master: Prefs.notifyEnabled, inUse: Prefs.notifyInUse,
-                     finished: Prefs.notifyFinished, autoClose: Prefs.notifyAutoClose)
     }
 
     func settingsChanged() {
         inUseOrders.removeAll()
         settingsRevision += 1
-        if !Prefs.notifyEnabled { clear(); return }
-        center.getDeliveredNotifications { values in
-            DispatchQueue.main.async {
-                let ids = values.filter {
-                    guard let raw = $0.request.content.userInfo["kind"] as? String,
-                          let kind = NotificationKind(rawValue: raw) else { return false }
-                    return !self.isEnabled(kind)
-                }.map { $0.request.identifier }
-                self.center.removeDeliveredNotifications(withIdentifiers: ids)
-                self.center.removePendingNotificationRequests(withIdentifiers: ids)
-            }
-        }
+        if !Prefs.notifyEnabled { clear() }
     }
 
     func openProblem(device: String, snCode: String, reason: String, occupied: Bool) {
@@ -221,8 +198,7 @@ final class AppNotifications: NSObject, ObservableObject, UNUserNotificationCent
         content.body = occupied ? name + "正在使用中" : LoginFeedback.chineseMessage(reason, fallback: "开启失败，请重试")
         content.userInfo = ["accountKey": Self.accountKey, "kind": kind.rawValue]
         content.threadIdentifier = "linyu.events." + Self.accountKey
-        if Prefs.notifyAlert { content.sound = .default }
-        content.interruptionLevel = Prefs.notifyAlert ? .active : .passive
+        content.interruptionLevel = .passive
         submit(UNNotificationRequest(identifier: "linyu.openProblem." + snCode, content: content, trigger: nil))
     }
 
@@ -243,14 +219,12 @@ final class AppNotifications: NSObject, ObservableObject, UNUserNotificationCent
                       SettlementNoticePolicy.shouldCorrect(createdAt: pending.createdAt, notificationCreatedAt: createdAt,
                         now: Int64(Date().timeIntervalSince1970 * 1000)),
                       let content = notification.request.content.mutableCopy() as? UNMutableNotificationContent else { return }
-                let automatic = content.userInfo["automatic"] as? Bool ?? false
-                guard Prefs.notifyEnabled, automatic ? Prefs.notifyAutoClose : Prefs.notifyFinished else { return }
+                guard Prefs.notifyEnabled else { return }
                 let seconds = max(0, pending.elapsedSec)
                 let duration = seconds < 60 ? "\(seconds)秒" : "\(seconds / 60)分\(seconds % 60)秒"
                 content.body = "用时 \(duration) · " + (amount > 0 ? "消费 \(MoneyFormat.withSymbol(amount))" : "无消费")
                 content.sound = nil
                 content.interruptionLevel = .passive
-                content.userInfo["quietUpdate"] = true
                 self.submit(UNNotificationRequest(identifier: id, content: content, trigger: nil))
             }
         }

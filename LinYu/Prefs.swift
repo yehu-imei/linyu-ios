@@ -124,22 +124,6 @@ enum Prefs {
         get { d.object(forKey: "notifyEnabled") as? Bool ?? true }
         set { d.set(newValue, forKey: "notifyEnabled") }
     }
-    static var notifyInUse: Bool {
-        get { d.object(forKey: "notifyInUse") as? Bool ?? true }
-        set { d.set(newValue, forKey: "notifyInUse") }
-    }
-    static var notifyFinished: Bool {
-        get { d.object(forKey: "notifyFinished") as? Bool ?? true }
-        set { d.set(newValue, forKey: "notifyFinished") }
-    }
-    static var notifyAutoClose: Bool {
-        get { d.object(forKey: "notifyAutoClose") as? Bool ?? true }
-        set { d.set(newValue, forKey: "notifyAutoClose") }
-    }
-    static var notifyAlert: Bool {
-        get { d.object(forKey: "notifyAlert") as? Bool ?? false }
-        set { d.set(newValue, forKey: "notifyAlert") }
-    }
 
     static var trendEnabled: Bool {
         get { d.object(forKey: "trendEnabled") as? Bool ?? true }
