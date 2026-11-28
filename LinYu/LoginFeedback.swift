@@ -40,6 +40,16 @@ enum LoginFeedback {
         return chineseMessage(value, fallback: fallback)
     }
 
+    static func smsSendMessage(_ error: Error) -> String {
+        let fallback = "验证码发送失败，请重试"
+        let reason = message(error, fallback: fallback)
+        // 发码接口不携带登录凭证，不能用它的错误文案判断会话已失效。
+        if isSessionExpiredMessage(reason) || reason == "请求失败" || reason == "请求失败，请稍后重试" {
+            return fallback
+        }
+        return reason
+    }
+
     /// 仅用于错误展示，不改变原始响应和业务判断；排除中英混合的异常详情。
     static func chineseMessage(_ value: String, fallback: String = "请求失败，请稍后重试") -> String {
         let text = value.trimmingCharacters(in: .whitespacesAndNewlines)

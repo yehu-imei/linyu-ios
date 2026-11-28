@@ -21,6 +21,7 @@ struct LoginView: View {
     @State private var busy = false
     @State private var errorText: String?
     @State private var countdown = 0
+    @State private var sendingCode = false
     @State private var countdownTask: Task<Void, Never>?
     @State private var smsTask: Task<Void, Never>?
 
@@ -237,7 +238,7 @@ struct LoginView: View {
             } label: {
                 // 固定宽度 84pt：文案在「发送」↔「60s」之间变化时按钮宽度不变，
                 // 否则会把左边自适应的输入框挤窄/挤宽，看着像抖了一下
-                Text(countdown > 0 ? "\(countdown)s" : "发送")
+                Text(countdown > 0 ? "\(countdown)s" : sendingCode ? "发送中…" : "发送")
                     .font(.system(size: 13))
                     .foregroundColor(.white)
                     .lineLimit(1)
@@ -250,7 +251,7 @@ struct LoginView: View {
         }
     }
 
-    private var canSend: Bool { !busy && countdown == 0 && phone.count == 11 }
+    private var canSend: Bool { !busy && !sendingCode && countdown == 0 && phone.count == 11 }
 
     /// 统一的外框输入框：圆角 14、蓝色图标、右侧清空按钮
     /// （对照 Android 的 OutlinedTextField + loginFieldColors）
@@ -329,19 +330,20 @@ struct LoginView: View {
     }
 
     private func sendCode() {
-        guard phone.count == 11, countdown == 0 else { return }
+        guard canSend else { return }
         let requestedPhone = phone
         errorText = nil
-        countdown = 60
-        startCountdown()
+        sendingCode = true
         smsTask = Task { @MainActor in
+            defer { sendingCode = false }
             do {
                 try await AuthService.sendSmsCode(phone: requestedPhone)
-            } catch {
                 guard !Task.isCancelled else { return }
-                countdownTask?.cancel()
-                countdown = 0
-                errorText = Self.friendly(error)
+                countdown = 60
+                startCountdown()
+            } catch {
+                guard !Task.isCancelled, phone == requestedPhone, isSmsMode else { return }
+                errorText = LoginFeedback.smsSendMessage(error)
             }
         }
     }

@@ -28,14 +28,14 @@ struct LinYuApp: App {
 
 #if DEBUG
 private struct AccountDialogPreview: View {
-    private let isPassword = CommandLine.arguments.contains("--preview-password")
+    private let startsInSMS = CommandLine.arguments.contains("--preview-password-sms")
 
     var body: some View {
         Color(.systemBackground)
             .ignoresSafeArea()
             .overlay {
-                if isPassword {
-                    ChangePasswordDialog(currentPhone: "13800000000") {}
+                if startsInSMS || CommandLine.arguments.contains("--preview-password") {
+                    ChangePasswordDialog(currentPhone: "13800000000", startsInSMS: startsInSMS) {}
                 } else {
                     ChangePhoneDialog(currentPhone: "13800000000", onDismiss: {})
                 }

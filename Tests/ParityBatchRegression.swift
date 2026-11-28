@@ -50,6 +50,13 @@ enum ParityBatchRegression {
         check(LoginFeedback.chineseMessage("  设备不在线  ") == "设备不在线", "清理业务提示首尾空白")
         check(LoginFeedback.chineseMessage("请求失败\n内部堆栈") == "请求失败，请稍后重试", "多行异常不透出界面")
         check(LoginFeedback.chineseMessage("Internal Server Error") == "请求失败，请稍后重试", "服务端英文错误使用中文兜底")
+        func smsError(_ reason: String) -> NSError {
+            NSError(domain: "sms", code: 1, userInfo: [NSLocalizedDescriptionKey: reason])
+        }
+        check(LoginFeedback.smsSendMessage(smsError("请先登录对应账号")) == "验证码发送失败，请重试", "发码失败不误判为登录失效")
+        check(LoginFeedback.smsSendMessage(smsError("请求失败")) == "验证码发送失败，请重试", "通用错误显示发码上下文")
+        check(LoginFeedback.smsSendMessage(smsError("验证码发送太频繁")) == "验证码发送太频繁", "保留明确的发码失败原因")
+        check(LoginFeedback.smsSendMessage(URLError(.timedOut)) == "连接超时，请重试", "验证码超时保留网络原因")
 
         ProfileCache.clear()
         ApiClient.getResponses = [

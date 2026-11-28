@@ -59,8 +59,10 @@ struct ChangePasswordDialog: View {
     @State private var submitting = false
     @State private var errorText: String?
 
-    init(currentPhone: String, onSuccess: @escaping () -> Void = {}, onDismiss: @escaping () -> Void) {
+    init(currentPhone: String, startsInSMS: Bool = false, onSuccess: @escaping () -> Void = {},
+         onDismiss: @escaping () -> Void) {
         self.currentPhone = currentPhone
+        _smsMode = State(initialValue: startsInSMS)
         self.onSuccess = onSuccess
         self.onDismiss = onDismiss
     }
@@ -77,9 +79,9 @@ struct ChangePasswordDialog: View {
             AlertCard(title: "修改密码", titleAlign: .leading) {
                 VStack(alignment: .leading, spacing: 10) {
                     if smsMode {
-                        AccountOutlinedField(title: "已绑定手机号", text: .constant(currentPhone),
-                                             keyboard: .numberPad)
-                            .disabled(true)
+                        Text("当前手机号：\(currentPhone)")
+                            .font(.system(size: 12))
+                            .foregroundStyle(colors.textSecondary)
 
                         HStack(alignment: .bottom, spacing: 10) {
                             AccountOutlinedField(title: "验证码", text: $code,
@@ -87,7 +89,7 @@ struct ChangePasswordDialog: View {
                             Button {
                                 codeRequest = Task { await sendCode() }
                             } label: {
-                                Text(countdown > 0 ? "\(countdown)s" : "发送")
+                                Text(countdown > 0 ? "\(countdown)s" : sending ? "发送中…" : "发送")
                                     .font(.system(size: 13))
                                     .foregroundStyle(.white)
                                     .lineLimit(1)
@@ -171,8 +173,8 @@ struct ChangePasswordDialog: View {
                 countdown -= 1
             }
         } catch {
-            guard SessionWork.isCurrent(generation) else { return }
-            errorText = LoginFeedback.message(error)
+            guard !Task.isCancelled, SessionWork.isCurrent(generation), smsMode else { return }
+            errorText = LoginFeedback.smsSendMessage(error)
         }
     }
 
@@ -250,7 +252,7 @@ struct ChangePhoneDialog: View {
                         Button {
                             codeRequest = Task { await sendCode() }
                         } label: {
-                            Text(countdown > 0 ? "\(countdown)s" : "发送")
+                            Text(countdown > 0 ? "\(countdown)s" : sending ? "发送中…" : "发送")
                                 .font(.system(size: 13))
                                 .foregroundStyle(.white)
                                 .lineLimit(1)
@@ -317,8 +319,8 @@ struct ChangePhoneDialog: View {
                 countdown -= 1
             }
         } catch {
-            guard SessionWork.isCurrent(generation), newPhone == recipient else { return }
-            errorText = LoginFeedback.message(error)
+            guard !Task.isCancelled, SessionWork.isCurrent(generation), newPhone == recipient else { return }
+            errorText = LoginFeedback.smsSendMessage(error)
         }
     }
 
