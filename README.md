@@ -8,7 +8,7 @@
 
 趣智校园第三方 iOS 客户端，用于控制校园热水器、查看消费账单。以简洁的界面提供设备操作、消费统计与个性化设置
 
-**⬇️ [下载 linyu-v3.1.2.ipa](https://github.com/yehu-imei/linyu-ios/releases/tag/v3.1.2)** · [Gitee 镜像](https://gitee.com/yehu-imei/linyu-ios/releases) · [安装教程](https://github.com/yehu-imei/Guides/blob/main/Tutorial/.ipa%E7%9A%84%E5%AE%89%E8%A3%85.md)
+**⬇️ [下载 linyu-v3.2.0.ipa](https://github.com/yehu-imei/linyu-ios/releases/tag/v3.2.0)** · [Gitee 镜像](https://gitee.com/yehu-imei/linyu-ios/releases) · [安装教程](https://github.com/yehu-imei/Guides/blob/main/Tutorial/.ipa%E7%9A%84%E5%AE%89%E8%A3%85.md)
 
 > 支持 iOS 16 及以上，桌面小组件需 iOS 17 及以上。IPA 需要自行签名安装
 > Android 版本请前往 [淋浴主仓库](https://github.com/yehu-imei/linyu)
