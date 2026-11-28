@@ -76,10 +76,7 @@ struct PluginManagementView: View {
             VStack(spacing: 0) {
                 header
                 if busy {
-                    ProgressView()
-                        .progressViewStyle(.linear)
-                        .tint(colors.accent)
-                        .padding(.horizontal, PageLayout.horizontalInset)
+                    PluginLoadingBar(tint: colors.accent)
                 }
                 pageContent
             }
@@ -688,6 +685,39 @@ struct PluginManagementView: View {
                 }
             }
         }
+    }
+}
+
+private struct PluginLoadingBar: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let tint: Color
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: reduceMotion)) { frame in
+            GeometryReader { geometry in
+                let width = geometry.size.width
+                let elapsed = frame.date.timeIntervalSinceReferenceDate / 1.8
+                let phase = CGFloat(elapsed.truncatingRemainder(dividingBy: 1))
+                let secondPhase = (phase + 0.5).truncatingRemainder(dividingBy: 1)
+
+                ZStack(alignment: .leading) {
+                    Capsule().fill(tint.opacity(0.18))
+                    Capsule()
+                        .fill(tint)
+                        .frame(width: width * 0.34)
+                        .offset(x: width * (reduceMotion ? 0.33 : phase * 1.34 - 0.34))
+                    if !reduceMotion {
+                        Capsule()
+                            .fill(tint)
+                            .frame(width: width * 0.18)
+                            .offset(x: width * (secondPhase * 1.18 - 0.18))
+                    }
+                }
+                .clipShape(Capsule())
+            }
+        }
+        .frame(height: 4)
+        .accessibilityRepresentation { ProgressView("正在处理插件") }
     }
 }
 

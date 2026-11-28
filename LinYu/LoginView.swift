@@ -222,7 +222,7 @@ struct LoginView: View {
             title: "手机号",
             text: Binding(get: { phone }, set: updatePhone),
             systemImage: "phone.fill",
-            keyboard: isSmsMode ? .numberPad : .default,
+            keyboard: .numberPad,
             contentType: isSmsMode ? .telephoneNumber : .username,
             secured: false,
             focus: $phoneFocused

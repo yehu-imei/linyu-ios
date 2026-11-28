@@ -137,29 +137,32 @@ struct LinYuToast: View {
     @Environment(\.appColors) private var colors
     let message: String
 
+    private var displayMessage: String {
+        let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let last = trimmed.last, last == "。" || last == "." || last == "．",
+              trimmed.dropLast().last != last else { return trimmed }
+        return String(trimmed.dropLast())
+    }
+
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: 22, style: .continuous)
-        HStack(spacing: 8) {
-            Image("LoginLogo")
-                .resizable()
-                .scaledToFit()
-                .frame(width: 23, height: 23)
-                .clipShape(Circle())
-                .accessibilityHidden(true)
-            Text(message)
+        let text = displayMessage
+        if !text.isEmpty {
+            Text(text)
                 .font(.system(size: 15, weight: .medium))
                 .foregroundStyle(colors.textPrimary)
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
                 .truncationMode(.head)
+                .frame(minHeight: 23)
+                .padding(.horizontal, 13)
+                .padding(.vertical, 9)
+                .background(colors.solidSurface, in: shape)
+                .overlay(shape.strokeBorder(colors.border, lineWidth: 0.8))
+                .shadow(color: .black.opacity(0.16), radius: 4, y: 2)
+                .padding(.horizontal, 24)
+                .frame(maxWidth: 420, alignment: .center)
         }
-        .padding(.horizontal, 13)
-        .padding(.vertical, 9)
-        .background(colors.solidSurface, in: shape)
-        .overlay(shape.strokeBorder(colors.border, lineWidth: 0.8))
-        .shadow(color: .black.opacity(0.16), radius: 4, y: 2)
-        .padding(.horizontal, 24)
-        .frame(maxWidth: 420, alignment: .center)
     }
 }
 
