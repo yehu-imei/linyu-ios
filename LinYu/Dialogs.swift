@@ -7,9 +7,16 @@ import SwiftUI
 // 两者都和 Android 长得不一样，所以这里手工复刻一个居中卡片。
 
 /// 遮罩 + 居中容器。点遮罩是否关闭由 `onTapOutside` 决定（null = 不能关）。
+private struct DialogContentHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+
 struct DialogScrim<Content: View>: View {
     var onTapOutside: (() -> Void)?
     @ViewBuilder let content: Content
+    /// 内容实测高度：用它决定 ScrollView 的高度，避免「整屏可点」和布局切换
+    @State private var measuredHeight: CGFloat = 0
 
     var body: some View {
         GeometryReader { geometry in
@@ -18,14 +25,27 @@ struct DialogScrim<Content: View>: View {
                     .ignoresSafeArea()
                     .onTapGesture { onTapOutside?() }
 
-                // ⚠️ 这里**不能**用 ScrollView 包住整块内容：它会把整个视口都变成
-                // 可点击区域，点遮罩就再也关不掉弹窗了（真机反馈）。
-                // 键盘撑不下时的处理放在 AlertCard 内部（内容区可滚动、按钮固定）。
-                content
-                    .padding(.horizontal, 28)
-                    .padding(.vertical, 24)
-                    // 高度上限 = 可视区（键盘弹出后会缩小），卡片不会再溢出到键盘后面
-                    .frame(maxWidth: .infinity, maxHeight: geometry.size.height)
+                // 内容外面套一个 ScrollView，但**高度只取内容自身高度**（见下方 measuredHeight）：
+                //  · 高度 = 卡片高度 → 卡片外的区域仍归遮罩，点外部能正常关闭
+                //  · 键盘把可视区压小时高度被夹到可视区 → 内容可滚动、按钮仍在卡片底部
+                //  · 全程只有一次布局，不做「能放下/放不下」的切换，卡片里的按钮不会跳位置
+                ScrollView(.vertical, showsIndicators: false) {
+                    content
+                        .padding(.horizontal, 28)
+                        .padding(.vertical, 24)
+                        .background(
+                            GeometryReader { proxy in
+                                Color.clear.preference(key: DialogContentHeightKey.self,
+                                                       value: proxy.size.height)
+                            }
+                        )
+                }
+                .frame(width: geometry.size.width,
+                       height: max(min(measuredHeight, geometry.size.height), 0))
+                // 首帧还没测到高度时先不画，避免卡片闪一下再归位
+                .opacity(measuredHeight > 0 ? 1 : 0)
+                .scrollDismissesKeyboard(.interactively)
+                .onPreferenceChange(DialogContentHeightKey.self) { measuredHeight = $0 }
             }
         }
         // 用整块屏幕定位，键盘弹出时仍为表单保留可用空间。
@@ -75,15 +95,11 @@ struct AlertCard<Content: View, Actions: View>: View {
             }
             .frame(maxWidth: .infinity, alignment: titleAlign == .center ? .center : .leading)
 
-            // ViewThatFits：先按内容自然高度排；键盘把空间压小、放不下时，
-            // 换成「可滚动的内容区」——动作按钮始终留在卡片底部，不会被顶到键盘后面。
-            ViewThatFits(in: .vertical) {
-                content.padding(.top, contentSpacing)
-                ScrollView(.vertical, showsIndicators: false) {
-                    content.padding(.top, contentSpacing)
-                }
-                .scrollDismissesKeyboard(.interactively)
-            }
+            // 内容区保持单一布局（滚动由外层 DialogScrim 统一处理）。
+            // ⚠️ 不能用 ViewThatFits：键盘弹出那一瞬会切换布局，卡片里的
+            // 「发送 / 短信验证修改密码」按钮会**跳位置**（真机反馈）。
+            content
+                .padding(.top, contentSpacing)
 
             HStack(spacing: 4) {
                 Spacer(minLength: 0)
