@@ -150,7 +150,7 @@ struct PluginRegression {
                   "uninstall remains disabled despite the bundled catalog")
         try check(InstalledPlugins.install(trend, defaults: defaults, bundled: bundled) &&
                   !InstalledPlugins.install(trend, defaults: defaults, bundled: bundled),
-                  "the default plugin can be reinstalled offline")
+                   "the installed default can be restored by importing a supported manifest")
 
         // ── 清单 v2：版本门控 + 权限声明 + 双源（与 Android 端对齐）──
         let pinnedVersion = PluginRepository.appVersionOverride
@@ -185,10 +185,25 @@ struct PluginRegression {
         try check(try PluginRepository.parseCatalog(
                       catalog([try catalogEntry(["apiVersion": 3]), plainEntry])).count == 1,
                   "one unsupported plugin does not break the rest of the catalog")
+        let invalidFields: [[String: Any]] = [
+            ["apiVersion": "2"], ["apiVersion": true], ["apiVersion": 0],
+            ["minAppVersion": 1], ["minAppVersion": " "], ["permissions": "device.room-filter"]
+        ]
+        for fields in invalidFields {
+            try check(try count(fields) == 0, "rejects a malformed declared field: \(fields.keys.first!)")
+        }
+        let deduplicated = try catalogEntry([
+            "formatVersion": 2, "permissions": ["device.room-filter", "device.room-filter"]
+        ])
+        let deduplicatedListing = try PluginRepository.parseCatalog(catalog([deduplicated])).first
+        try check(deduplicatedListing?.manifest.formatVersion == 2 &&
+                  deduplicatedListing?.manifest.permissions == ["device.room-filter"],
+                  "accepts opt-in v2 entries and deduplicates permissions")
 
         let v2 = PluginManifest(id: "room-binding", name: manifest.name, author: manifest.author,
                                 version: manifest.version, description: manifest.description,
-                                apiVersion: 2, minAppVersion: "3.1.2", permissions: ["device.room-filter"])
+                                apiVersion: 2, minAppVersion: "3.1.2", permissions: ["device.room-filter"],
+                                formatVersion: 2)
         let v2Data = PluginRepository.manifestData(v2)
         try check(v2Data != nil && (try PluginRepository.parsePackage(v2Data!)) == v2,
                   "v2 fields survive serialization round trip")
@@ -200,5 +215,26 @@ struct PluginRegression {
                   PluginRepository.repositorySources[0].hasPrefix("https://raw.giteeusercontent.com/") &&
                   PluginRepository.repositorySources[1].hasPrefix("https://raw.githubusercontent.com/"),
                   "plugin sources are Gitee first and GitHub as fallback")
+
+        let validCatalog = try catalog([plainEntry])
+        let primary = PluginRepository.repositorySources[0]
+        let backup = PluginRepository.repositorySources[1]
+        var requests: [String] = []
+        let remote = try await PluginRepository.fetchCatalog { source, _ in
+            requests.append(source)
+            return source == primary ? Data() : validCatalog
+        }
+        try check(requests == [primary, backup] && remote.count == 1 && remote[0].source == backup,
+                  "invalid primary directory falls back and keeps its mirror origin")
+        requests.removeAll()
+        let downloaded = try await PluginRepository.download(remote[0]) { source, _ in
+            requests.append(source)
+            return source == backup ? storedZIP : deflatedZIP
+        }
+        try check(requests == [backup, primary] && downloaded == manifest,
+                  "prefers catalog origin and retries another mirror when the checksum does not match")
+        let emptyCatalog = try catalog([])
+        let emptyRemote = try await PluginRepository.fetchCatalog { _, _ in emptyCatalog }
+        try check(emptyRemote.isEmpty, "online catalog leaves an empty server list empty")
     }
 }

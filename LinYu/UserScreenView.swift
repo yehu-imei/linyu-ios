@@ -388,7 +388,6 @@ struct UserScreenView: View {
             .contentShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
         }
         .buttonStyle(InstantButtonStyle())
-        .padding(.bottom, 16)
     }
 
     private func editIcon(

@@ -40,7 +40,7 @@ struct PluginManagementView: View {
 
     @State private var page = Page.management
     @State private var importingFile = false
-    @State private var catalog = PluginRepository.bundledCatalog
+    @State private var catalog: [PluginListing] = []
     @State private var catalogFailed = false
     @State private var authorRefresh = 0
     @State private var githubLogins: [Int64: String] = [:]
@@ -387,30 +387,14 @@ struct PluginManagementView: View {
     }
 
     @ViewBuilder private var repositoryContent: some View {
-        let publishedIDs = Set(catalog.map(\.id))
-        let installedOnly = installed.filter { !publishedIDs.contains($0.id) }
-        let isEmpty = catalog.isEmpty && installedOnly.isEmpty
         if catalogFailed {
-            if isEmpty {
-                emptyMessage("无法读取插件目录")
-                retryCatalogButton
-            } else {
-                HStack {
-                    Text("暂时无法访问在线插件仓库")
-                        .font(.system(size: 13))
-                        .foregroundStyle(colors.textSecondary)
-                    Spacer(minLength: 6)
-                    retryCatalogButton
-                }
-            }
-        } else if isEmpty, !busy {
+            emptyMessage("无法读取插件目录")
+            retryCatalogButton
+        } else if catalog.isEmpty, !busy {
             emptyMessage("暂无可用插件")
         }
         ForEach(catalog) { listing in
-            repositoryCard(listing.manifest, listing: listing)
-        }
-        ForEach(installedOnly) { plugin in
-            repositoryCard(plugin, listing: nil)
+            repositoryCard(listing)
         }
     }
 
@@ -421,7 +405,8 @@ struct PluginManagementView: View {
             .frame(minHeight: 44)
     }
 
-    private func repositoryCard(_ plugin: PluginManifest, listing: PluginListing?) -> some View {
+    private func repositoryCard(_ listing: PluginListing) -> some View {
+        let plugin = listing.manifest
         let current = installed.first { $0.id == plugin.id }
         let canUpdate = current.map { PluginRepository.isUpdate($0, plugin) } ?? false
         return HStack(spacing: 10) {
@@ -444,7 +429,7 @@ struct PluginManagementView: View {
             }
             .buttonStyle(.plain)
 
-            if let listing, current == nil || canUpdate {
+            if current == nil || canUpdate {
                 Button(canUpdate ? "更新" : "安装") {
                     download(listing, updating: canUpdate)
                 }
@@ -477,12 +462,19 @@ struct PluginManagementView: View {
         let description = plugin.details
             ?? catalog.first(where: { $0.id == plugin.id })?.manifest.details
             ?? plugin.description
-        let detailText = Text(description)
-            .font(.system(size: 15))
-            .foregroundStyle(colors.textPrimary)
-            .lineSpacing(4)
-            .fixedSize(horizontal: false, vertical: true)
-            .frame(maxWidth: .infinity, alignment: .leading)
+        let detailBody = VStack(alignment: .leading, spacing: 10) {
+            if !plugin.permissions.isEmpty {
+                Text("权限：" + plugin.permissions.map(PluginRepository.permissionLabel).joined(separator: "、"))
+                    .font(.system(size: 13))
+                    .foregroundStyle(colors.textSecondary)
+            }
+            Text(description)
+                .font(.system(size: 15))
+                .foregroundStyle(colors.textPrimary)
+                .lineSpacing(4)
+        }
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: .infinity, alignment: .leading)
         return DialogScrim(onTapOutside: { detailPlugin = nil }) {
             AlertCard(title: plugin.name, titleAlign: .leading,
                       contentSpacing: 10, actionSpacing: 0, cardPadding: 22) {
@@ -491,18 +483,11 @@ struct PluginManagementView: View {
                         .font(.system(size: 13))
                         .foregroundStyle(colors.textSecondary)
                         .lineLimit(1)
-                    if !plugin.permissions.isEmpty {
-                        // v2：把插件声明访问的数据/动作直接摆给用户看（知情权，不是装饰）
-                        Text("权限：" + plugin.permissions.map(PluginRepository.permissionLabel).joined(separator: "、"))
-                            .font(.system(size: 13))
-                            .foregroundStyle(colors.textSecondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
                     PluginDetailDescriptionLayout {
-                        detailText.hidden().accessibilityHidden(true)
+                        detailBody.hidden().accessibilityHidden(true)
                         ViewThatFits(in: .vertical) {
-                            detailText
-                            ScrollView { detailText }
+                            detailBody
+                            ScrollView { detailBody }
                         }
                     }
                 }
@@ -621,6 +606,7 @@ struct PluginManagementView: View {
                 }
             } catch {
                 guard !Task.isCancelled else { return }
+                catalog = []
                 catalogFailed = true
                 if reportUpdates { onMessage("检查更新失败，请重试") }
                 if reportRefresh { onMessage("刷新失败，请重试") }
@@ -637,12 +623,15 @@ struct PluginManagementView: View {
                 try await loadCatalog()
             } catch {
                 guard !Task.isCancelled else { return }
+                catalog = []
                 catalogFailed = true
+                onMessage("检查更新失败，请重试")
+                return
             }
 
             let updates = plugins.compactMap { availableUpdate(for: $0) }
             guard !updates.isEmpty else {
-                onMessage(catalogFailed ? "检查更新失败，请重试" : "所选插件均为最新版本")
+                onMessage("所选插件均为最新版本")
                 return
             }
 
@@ -707,10 +696,9 @@ private struct PluginDetailDescriptionLayout: Layout {
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
         let width = proposal.width.flatMap { $0.isFinite ? $0 : nil }
-        // Measure only the text's natural height. The fallback scroll view may claim all the space.
-        let textSize = subviews[0].sizeThatFits(ProposedViewSize(width: width, height: nil))
-        let height = min(textSize.height, maxHeight, proposal.height ?? maxHeight)
-        return CGSize(width: width ?? textSize.width, height: height)
+        let naturalSize = subviews[0].sizeThatFits(ProposedViewSize(width: width, height: nil))
+        let height = min(naturalSize.height, maxHeight, proposal.height ?? maxHeight)
+        return CGSize(width: width ?? naturalSize.width, height: height)
     }
 
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {

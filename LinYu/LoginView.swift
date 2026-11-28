@@ -223,7 +223,7 @@ struct LoginView: View {
     }
 
     private var smsField: some View {
-        HStack(alignment: .top, spacing: 12) {
+        HStack(alignment: .bottom, spacing: 12) {
             outlinedField(
                 title: "验证码",
                 text: $smsCode,
@@ -241,7 +241,7 @@ struct LoginView: View {
                     .font(.system(size: 13))
                     .foregroundColor(.white)
                     .lineLimit(1)
-                    .frame(width: 84, height: 56)
+                    .frame(width: 84, height: AccountOutlinedField.outlineHeight)
                     .background(canSend ? Color(hex: 0x1A73E8) : Color(hex: 0x90CAF9))
                     .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
             }
@@ -262,45 +262,10 @@ struct LoginView: View {
         contentType: UITextContentType,
         secured: Bool
     ) -> some View {
-        HStack(spacing: 10) {
-            if let systemImage {
-                Image(systemName: systemImage)
-                    .font(.system(size: 15))
-                    .foregroundColor(Color(hex: 0x1A73E8))
-                    .frame(width: 20)
-            }
-
-            Group {
-                if secured {
-                    SecureField(title, text: text)
-                } else {
-                    TextField(title, text: text)
-                }
-            }
-            .font(.system(size: 15))
-            .foregroundColor(Color(hex: 0x1A1A1A))
-            .keyboardType(keyboard)
-            .textInputAutocapitalization(.never)
-            .autocorrectionDisabled()
-            // 告诉系统这个框是什么，iOS 的密码自动填充才能识别并回填
-            .textContentType(contentType)
-
-            if !text.wrappedValue.isEmpty {
-                Button { text.wrappedValue = "" } label: {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundColor(.gray)
-                }
-                .buttonStyle(InstantButtonStyle())
-                .accessibilityLabel("清空\(title)")
-            }
-        }
-        .padding(.horizontal, 14)
-        .frame(height: 56)
-        .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .strokeBorder(Color(hex: 0x1A73E8).opacity(0.45), lineWidth: 1)
-        )
+        AccountOutlinedField(title: title, text: text, keyboard: keyboard,
+                             contentType: contentType, secured: secured,
+                             leadingIcon: systemImage, showsClear: true)
+            .environment(\.appColors, .light)
     }
 
     // MARK: - 登录按钮

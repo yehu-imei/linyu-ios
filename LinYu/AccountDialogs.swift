@@ -51,8 +51,9 @@ struct ChangePasswordDialog: View {
     @State private var newPwd = ""
     @State private var confirmPwd = ""
     @State private var code = ""
-    /// 与 Android 一致：预填当前手机号，允许修正后发送验证码。
-    @State private var phone: String
+    @State private var codeDelivered = false
+    @State private var generation = Session.shared.requestGeneration
+    @State private var codeRequest: Task<Void, Never>?
     @State private var sending = false
     @State private var countdown = 0
     @State private var submitting = false
@@ -62,12 +63,11 @@ struct ChangePasswordDialog: View {
         self.currentPhone = currentPhone
         self.onSuccess = onSuccess
         self.onDismiss = onDismiss
-        _phone = State(initialValue: currentPhone)
     }
 
     private var canSubmit: Bool {
         if smsMode {
-            return !code.isEmpty && !newPwd.isEmpty && !confirmPwd.isEmpty
+            return codeDelivered && !code.isEmpty && !newPwd.isEmpty && !confirmPwd.isEmpty
         }
         return !oldPwd.isEmpty && !newPwd.isEmpty && !confirmPwd.isEmpty
     }
@@ -77,20 +77,21 @@ struct ChangePasswordDialog: View {
             AlertCard(title: "修改密码", titleAlign: .leading) {
                 VStack(alignment: .leading, spacing: 10) {
                     if smsMode {
-                        dialogField("手机号", text: Binding(get: { phone }, set: {
-                            phone = $0.trimmingCharacters(in: .whitespacesAndNewlines)
-                        }), keyboard: .numberPad)
+                        AccountOutlinedField(title: "已绑定手机号", text: .constant(currentPhone),
+                                             keyboard: .numberPad)
+                            .disabled(true)
 
-                        HStack(spacing: 10) {
-                            dialogField("验证码", text: $code, keyboard: .numberPad)
+                        HStack(alignment: .bottom, spacing: 10) {
+                            AccountOutlinedField(title: "验证码", text: $code,
+                                                 keyboard: .numberPad, contentType: .oneTimeCode)
                             Button {
-                                Task { await sendCode() }
+                                codeRequest = Task { await sendCode() }
                             } label: {
                                 Text(countdown > 0 ? "\(countdown)s" : "发送")
                                     .font(.system(size: 13))
                                     .foregroundStyle(.white)
                                     .lineLimit(1)
-                                    .frame(width: 86, height: 50)
+                                    .frame(width: 86, height: AccountOutlinedField.outlineHeight)
                                     .background(canSendCode ? colors.accent : colors.accent.opacity(0.45))
                                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                             }
@@ -98,11 +99,14 @@ struct ChangePasswordDialog: View {
                             .disabled(!canSendCode)
                         }
                     } else {
-                        dialogField("当前密码", text: $oldPwd, keyboard: .default, secured: true)
+                        AccountOutlinedField(title: "当前密码", text: $oldPwd,
+                                             contentType: .password, secured: true)
                     }
 
-                    dialogField("新密码", text: $newPwd, keyboard: .default, secured: true)
-                    dialogField("确认新密码", text: $confirmPwd, keyboard: .default, secured: true)
+                    AccountOutlinedField(title: "新密码", text: $newPwd,
+                                         contentType: .newPassword, secured: true)
+                    AccountOutlinedField(title: "确认新密码", text: $confirmPwd,
+                                         contentType: .newPassword, secured: true)
 
                     Button {
                         smsMode.toggle()
@@ -143,29 +147,38 @@ struct ChangePasswordDialog: View {
             }
         }
         .interactiveDismissDisabled(submitting)
+        .onDisappear { codeRequest?.cancel() }
     }
 
-    private var canSendCode: Bool { !sending && countdown == 0 && phone.count == 11 }
+    private var canSendCode: Bool { !sending && countdown == 0 && currentPhone.count == 11 }
 
     private func sendCode() async {
+        guard canSendCode, SessionWork.isCurrent(generation), Session.shared.telephone == currentPhone else { return }
         sending = true
         errorText = nil
+        codeDelivered = false
+        code = ""
         defer { sending = false }
         do {
-            // ⚠️ typeId = 2 才是「改密码」的验证码（照搬 Android 注释）
-            try await AuthService.sendSmsCode(phone: phone, typeId: 2)
+            try await SessionWork.$generation.withValue(generation) {
+                try await AuthService.sendSmsCode(phone: currentPhone, typeId: 2)
+            }
+            guard SessionWork.isCurrent(generation), Session.shared.telephone == currentPhone else { return }
+            codeDelivered = true
             countdown = 60
             while countdown > 0 {
-                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                try await Task.sleep(nanoseconds: 1_000_000_000)
                 countdown -= 1
             }
         } catch {
+            guard SessionWork.isCurrent(generation) else { return }
             errorText = LoginFeedback.message(error)
         }
     }
 
     private func submit() async {
-        guard canSubmit, !submitting else { return }
+        guard canSubmit, !submitting, SessionWork.isCurrent(generation),
+              Session.shared.telephone == currentPhone else { return }
         guard newPwd == confirmPwd else { errorText = "两次输入的新密码不一致"; return }
         submitting = true
         errorText = nil
@@ -173,56 +186,23 @@ struct ChangePasswordDialog: View {
         do {
             // 密码用和登录同一套加密：MD5 取后 10 位大写
             let enc = AuthService.encryptPassword(newPwd)
-            let raw: Data
-            if smsMode {
-                raw = try await ApiClient.post(
-                    "/user/password/forget",
-                    form: ["password": enc, "code": code],
-                    tag: "forgetPassword"
-                )
-            } else {
-                raw = try await ApiClient.post(
-                    "/user/password/update",
-                    form: [
-                        "oldPassword": AuthService.encryptPassword(oldPwd),
-                        "password": enc
-                    ],
-                    tag: "updatePassword"
-                )
+            let path = smsMode ? "/user/password/forget" : "/user/password/update"
+            let form = smsMode
+                ? ["password": enc, "code": code]
+                : ["oldPassword": AuthService.encryptPassword(oldPwd), "password": enc]
+            let tag = smsMode ? "forgetPassword" : "updatePassword"
+            let raw = try await SessionWork.$generation.withValue(generation) {
+                try await ApiClient.post(path, form: form, tag: tag)
             }
+            guard SessionWork.isCurrent(generation) else { return }
             _ = try ApiClient.decode(EmptyData.self, from: raw, path: "changePassword")
             SavedCredential.clear(for: currentPhone)
             onSuccess()
             onDismiss()
         } catch {
+            guard SessionWork.isCurrent(generation) else { return }
             errorText = LoginFeedback.message(error)
         }
-    }
-
-    private func dialogField(
-        _ title: String,
-        text: Binding<String>,
-        keyboard: UIKeyboardType,
-        secured: Bool = false
-    ) -> some View {
-        Group {
-            if secured {
-                SecureField(title, text: text)
-            } else {
-                TextField(title, text: text)
-            }
-        }
-        .font(.system(size: 14))
-        .foregroundStyle(colors.textPrimary)
-        .keyboardType(keyboard)
-        .textInputAutocapitalization(.never)
-        .autocorrectionDisabled()
-        .padding(.horizontal, 12)
-        .frame(height: 50)
-        .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(colors.border, lineWidth: 1)
-        )
     }
 }
 
@@ -237,13 +217,16 @@ struct ChangePhoneDialog: View {
 
     @State private var newPhone = ""
     @State private var code = ""
+    @State private var codeRecipient: String?
+    @State private var generation = Session.shared.requestGeneration
+    @State private var codeRequest: Task<Void, Never>?
     @State private var sending = false
     @State private var countdown = 0
     @State private var submitting = false
     @State private var errorText: String?
 
     private var canSubmit: Bool {
-        newPhone.count == 11 && !code.isEmpty && !submitting
+        newPhone.count == 11 && codeRecipient == newPhone && !code.isEmpty && !submitting
     }
 
     var body: some View {
@@ -257,18 +240,21 @@ struct ChangePhoneDialog: View {
                         .font(.system(size: 12))
                         .foregroundStyle(colors.textSecondary)
 
-                    field("新手机号", text: $newPhone, keyboard: .numberPad)
+                    AccountOutlinedField(title: "新手机号",
+                                         text: Binding(get: { newPhone }, set: updateNewPhone),
+                                         keyboard: .numberPad, contentType: .telephoneNumber)
 
-                    HStack(spacing: 10) {
-                        field("验证码", text: $code, keyboard: .numberPad)
+                    HStack(alignment: .bottom, spacing: 10) {
+                        AccountOutlinedField(title: "验证码", text: $code,
+                                             keyboard: .numberPad, contentType: .oneTimeCode)
                         Button {
-                            Task { await sendCode() }
+                            codeRequest = Task { await sendCode() }
                         } label: {
                             Text(countdown > 0 ? "\(countdown)s" : "发送")
                                 .font(.system(size: 13))
                                 .foregroundStyle(.white)
                                 .lineLimit(1)
-                                .frame(width: 86, height: 50)
+                                .frame(width: 86, height: AccountOutlinedField.outlineHeight)
                                 .background(canSend ? colors.accent : colors.accent.opacity(0.45))
                                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                         }
@@ -298,66 +284,67 @@ struct ChangePhoneDialog: View {
             }
         }
         .interactiveDismissDisabled(submitting)
+        .onDisappear { codeRequest?.cancel() }
     }
 
     private var canSend: Bool { !sending && countdown == 0 && newPhone.count == 11 }
 
+    private func updateNewPhone(_ value: String) {
+        guard newPhone != value else { return }
+        newPhone = value
+        code = ""
+        codeRecipient = nil
+        errorText = nil
+    }
+
     private func sendCode() async {
+        guard canSend, SessionWork.isCurrent(generation) else { return }
+        let recipient = newPhone
         sending = true
         errorText = nil
+        code = ""
+        codeRecipient = nil
         defer { sending = false }
         do {
-            // ⚠️ typeId = 5 = 发到**新**号的换绑验证码
-            try await AuthService.sendSmsCode(phone: newPhone, typeId: 5)
+            try await SessionWork.$generation.withValue(generation) {
+                try await AuthService.sendSmsCode(phone: recipient, typeId: 5)
+            }
+            guard SessionWork.isCurrent(generation) else { return }
+            if newPhone == recipient { codeRecipient = recipient }
             countdown = 60
             while countdown > 0 {
-                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                try await Task.sleep(nanoseconds: 1_000_000_000)
                 countdown -= 1
             }
         } catch {
+            guard SessionWork.isCurrent(generation), newPhone == recipient else { return }
             errorText = LoginFeedback.message(error)
         }
     }
 
     private func submit() async {
-        guard canSubmit, !submitting else { return }
+        guard canSubmit, SessionWork.isCurrent(generation),
+              Session.shared.telephone == currentPhone else { return }
+        let recipient = newPhone
         let previousPhone = Session.shared.telephone
         submitting = true
         errorText = nil
         defer { submitting = false }
         do {
-            let raw = try await ApiClient.post(
-                "/user/phone/update",
-                form: ["newTelephone": newPhone, "code": code],
-                tag: "updatePhone"
-            )
+            let form = ["newTelephone": recipient, "code": code]
+            let raw = try await SessionWork.$generation.withValue(generation) {
+                try await ApiClient.post("/user/phone/update", form: form, tag: "updatePhone")
+            }
+            guard SessionWork.isCurrent(generation) else { return }
             _ = try ApiClient.decode(EmptyData.self, from: raw, path: "updatePhone")
             SavedCredential.clear(for: previousPhone)
             // 认证参数里的 telephone 也得跟着换，否则后续请求还在用旧号
-            Session.shared.updateTelephone(newPhone)
+            Session.shared.updateTelephone(recipient)
             onSuccess()
             onDismiss()
         } catch {
+            guard SessionWork.isCurrent(generation) else { return }
             errorText = LoginFeedback.message(error)
         }
-    }
-
-    private func field(
-        _ title: String,
-        text: Binding<String>,
-        keyboard: UIKeyboardType
-    ) -> some View {
-        TextField(title, text: text)
-            .font(.system(size: 14))
-            .foregroundStyle(colors.textPrimary)
-            .keyboardType(keyboard)
-            .textInputAutocapitalization(.never)
-            .autocorrectionDisabled()
-            .padding(.horizontal, 12)
-            .frame(height: 50)
-            .overlay(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .strokeBorder(colors.border, lineWidth: 1)
-            )
     }
 }

@@ -17,10 +17,13 @@ struct PluginManifest: Equatable, Identifiable, Sendable {
     let minAppVersion: String?
     /// 插件会访问的数据/动作；不在客户端白名单里的权限一律拒绝（fail closed）
     let permissions: [String]
+    /// 2 只在目录条目与包清单中使用，旧客户端会跳过。
+    let formatVersion: Int
 
     init(id: String, name: String, author: String, version: String, description: String,
          details: String? = nil, authorGithubID: Int64? = nil, versionEpoch: Int = 0,
-         apiVersion: Int = 1, minAppVersion: String? = nil, permissions: [String] = []) {
+         apiVersion: Int = 1, minAppVersion: String? = nil, permissions: [String] = [],
+         formatVersion: Int = 1) {
         self.id = id
         self.name = name
         self.author = author
@@ -32,6 +35,7 @@ struct PluginManifest: Equatable, Identifiable, Sendable {
         self.apiVersion = apiVersion
         self.minAppVersion = minAppVersion
         self.permissions = permissions
+        self.formatVersion = formatVersion
     }
 }
 
@@ -39,13 +43,13 @@ struct PluginListing: Equatable, Identifiable, Sendable {
     let manifest: PluginManifest
     let path: String
     let sha256: String
-    let bundled: Bool
+    let source: String?
 
-    init(manifest: PluginManifest, path: String, sha256: String, bundled: Bool = false) {
+    init(manifest: PluginManifest, path: String, sha256: String, source: String? = nil) {
         self.manifest = manifest
         self.path = path
         self.sha256 = sha256
-        self.bundled = bundled
+        self.source = source
     }
 
     var id: String { manifest.id }
@@ -53,9 +57,11 @@ struct PluginListing: Equatable, Identifiable, Sendable {
 
 struct PluginError: LocalizedError {
     let message: String
+    let incompatible: Bool
 
-    init(_ message: String) {
+    init(_ message: String, incompatible: Bool = false) {
         self.message = message
+        self.incompatible = incompatible
     }
 
     var errorDescription: String? { message }
@@ -151,32 +157,25 @@ enum PluginRepository {
     static let bundledCatalog: [PluginListing] = {
         guard let url = Bundle.main.url(forResource: "linyu_bundled_plugins", withExtension: "json"),
               let data = try? Data(contentsOf: url) else { return [] }
-        return (try? parseCatalog(data))?.map {
-            PluginListing(manifest: $0.manifest, path: $0.path, sha256: $0.sha256, bundled: true)
-        } ?? []
+        return (try? parseCatalog(data)) ?? []
     }()
 
-    static func fetchCatalog() async throws -> [PluginListing] {
-        let data = try await fetch("catalog.json")
-        let remote = try parseCatalog(data)
-        let updates = Dictionary(uniqueKeysWithValues: remote.map { ($0.id, $0) })
-        let local = bundledCatalog.map { bundled in
-            guard let entry = updates[bundled.id], isUpdate(bundled.manifest, entry.manifest) else { return bundled }
-            return entry
+    static func fetchCatalog(read: (String, String) async throws -> Data = fetchBytes) async throws -> [PluginListing] {
+        try await fetchValidated("catalog.json", read: read) { data, source in
+            try parseCatalog(data).map {
+                PluginListing(manifest: $0.manifest, path: $0.path, sha256: $0.sha256, source: source)
+            }
         }
-        return remote.filter { item in !local.contains(where: { $0.id == item.id }) } + local
     }
 
-    static func download(_ listing: PluginListing) async throws -> PluginManifest {
-        if listing.bundled {
-            guard bundledCatalog.contains(listing) else { throw PluginError("插件清单无效") }
-            return listing.manifest
-        }
+    static func download(_ listing: PluginListing,
+                         read: (String, String) async throws -> Data = fetchBytes) async throws -> PluginManifest {
         guard packagePath(for: listing.manifest) == listing.path else {
             throw PluginError("插件下载地址无效")
         }
-        let data = try await fetch(listing.path)
-        return try verifyDownload(listing, data: data)
+        return try await fetchValidated(listing.path, preferredSource: listing.source, read: read) { data, _ in
+            try verifyDownload(listing, data: data)
+        }
     }
 
     static func fetchGithubLogins(_ manifests: [PluginManifest]) async -> [Int64: String] {
@@ -259,12 +258,14 @@ enum PluginRepository {
         }
         var seen = Set<String>()
         return try entries.compactMap { item in
-            guard let id = item["id"] as? String, capabilities[id] != nil, isFormatOne(item) else { return nil }
-            if let reason = unsupportedReason(item) {
-                log("跳过插件 \(id)：\(reason)")
+            guard let id = item["id"] as? String, capabilities[id] != nil, manifestFormat(item) != nil else { return nil }
+            let manifest: PluginManifest
+            do {
+                manifest = try parseManifest(item)
+            } catch let error as PluginError where error.incompatible {
+                log("跳过插件 \(id)：\(error.message)")
                 return nil
             }
-            let manifest = try parseManifest(item)
             guard let path = item["path"] as? String, path == packagePath(for: manifest),
                   let checksum = item["sha256"] as? String, isSHA256(checksum) else {
                 throw PluginError("插件下载信息无效")
@@ -293,9 +294,7 @@ enum PluginRepository {
             ? try PluginZip.readManifest(data, limit: manifestLimit)
             : data
         guard manifestData.count <= manifestLimit else { throw PluginError("插件清单过大") }
-        let json = try jsonObject(manifestData, error: "插件清单无效")
-        if let reason = unsupportedReason(json) { throw PluginError(reason) }
-        return try parseManifest(json)
+        return try parseManifest(jsonObject(manifestData, error: "插件清单无效"))
     }
 
     static func manifestData(_ manifest: PluginManifest) -> Data? {
@@ -306,7 +305,7 @@ enum PluginRepository {
             "author": manifest.author,
             "version": manifest.version,
             "description": manifest.description,
-            "formatVersion": 1,
+            "formatVersion": manifest.formatVersion,
             "capabilities": [capability]
         ]
         if let details = manifest.details { json["details"] = details }
@@ -319,31 +318,44 @@ enum PluginRepository {
         return try? JSONSerialization.data(withJSONObject: json)
     }
 
-    /// 从插件仓库取文件：**按 [sources] 顺序尝试**，任一成功即返回。
-    ///
-    /// 只有网络层/HTTP 失败才换源；拿到内容之后的校验（大小、SHA-256、清单字段）不重试 ——
-    /// 那是文件本身的问题，换源只会拿到同一份坏文件。
-    private static func fetch(_ path: String) async throws -> Data {
+    private static func fetchValidated<T>(
+        _ path: String, preferredSource: String? = nil,
+        read: (String, String) async throws -> Data,
+        validate: (Data, String) throws -> T
+    ) async throws -> T {
+        let ordered = if let preferredSource, sources.contains(preferredSource) {
+            [preferredSource] + sources.filter { $0 != preferredSource }
+        } else {
+            sources
+        }
         var lastError: Error?
-        for base in sources {
+        var validationError: Error?
+        for base in ordered {
+            try Task.checkCancellation()
             do {
-                return try await fetch(from: base, path: path)
+                let data = try await read(base, path)
+                try Task.checkCancellation()
+                do {
+                    return try validate(data, base)
+                } catch {
+                    validationError = error
+                    throw error
+                }
             } catch is CancellationError {
                 throw CancellationError()
-            } catch let error as PluginError {
-                log("插件源不可用：\(base)（\(path)）")
-                lastError = error
             } catch {
                 try Task.checkCancellation()
                 log("插件源不可用：\(base)（\(path)）")
                 lastError = error
             }
         }
+        try Task.checkCancellation()
+        if let validationError { throw validationError }
         if let lastError { throw PluginError(lastError.localizedDescription) }
         throw PluginError("无法连接插件仓库，请稍后重试")
     }
 
-    private static func fetch(from baseURL: String, path: String) async throws -> Data {
+    private static func fetchBytes(_ baseURL: String, _ path: String) async throws -> Data {
         guard let url = URL(string: baseURL + path) else { throw PluginError("插件下载地址无效") }
         do {
             let (bytes, response) = try await session.bytes(from: url)
@@ -371,31 +383,36 @@ enum PluginRepository {
         }
     }
 
-    /// 当前客户端能不能用这条清单；能用返回 nil，不能用返回原因。
-    ///
-    /// 三类限制（v1 清单全部走默认值、永远通过）：
-    /// 1. `apiVersion` 高于 [supportedAPI]
-    /// 2. `minAppVersion` 高于当前 App 版本
-    /// 3. 声明了 [knownPermissions] 之外的权限（fail closed）
-    static func unsupportedReason(_ json: [String: Any]) -> String? {
-        let api = (json["apiVersion"] as? Int) ?? 1
-        if api > supportedAPI { return "需要新版淋浴（插件 apiVersion=\(api)）" }
+    private static func compatibility(_ json: [String: Any]) throws -> (api: Int, minimum: String?, permissions: [String]) {
+        let api: Int64
+        if let field = json["apiVersion"] {
+            guard let value = positiveInt(field) else { throw PluginError("插件 API 版本无效", incompatible: true) }
+            api = value
+        } else {
+            api = 1
+        }
+        guard api <= supportedAPI else { throw PluginError("需要新版淋浴（插件 apiVersion=\(api)）", incompatible: true) }
 
-        if let raw = (json["minAppVersion"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !raw.isEmpty {
-            guard let required = versionParts(raw) else { return "插件的最低版本号无效" }
-            guard let current = versionParts(appVersion) else {
-                return "需要淋浴 \(raw) 及以上（当前 \(appVersion)）"
+        var minimum: String?
+        if let field = json["minAppVersion"] {
+            guard let raw = (field as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  let required = versionParts(raw) else { throw PluginError("插件的最低版本号无效", incompatible: true) }
+            guard let current = versionParts(appVersion), compareVersions(required, current) <= 0 else {
+                throw PluginError("需要淋浴 \(raw) 及以上（当前 \(appVersion)）", incompatible: true)
             }
-            if compareVersions(required, current) > 0 {
-                return "需要淋浴 \(raw) 及以上（当前 \(appVersion)）"
-            }
+            minimum = raw
         }
 
-        let permissions = (json["permissions"] as? [String]) ?? []
-        let unknown = permissions.filter { !knownPermissions.contains($0) }
-        if !unknown.isEmpty { return "声明了未知权限：\(unknown.joined(separator: "、"))" }
-        return nil
+        var permissions: [String] = []
+        if let field = json["permissions"] {
+            guard let declared = field as? [String] else { throw PluginError("插件权限声明无效", incompatible: true) }
+            if let unknown = declared.first(where: { !knownPermissions.contains($0) }) {
+                throw PluginError("声明了未知权限：\(unknown)", incompatible: true)
+            }
+            var seen = Set<String>()
+            permissions = declared.filter { seen.insert($0).inserted }
+        }
+        return (Int(api), minimum, permissions)
     }
 
     /// 逐段比较 x.y.z；a < b 返回负数
@@ -409,7 +426,8 @@ enum PluginRepository {
     }
 
     private static func parseManifest(_ json: [String: Any]) throws -> PluginManifest {
-        guard let id = json["id"] as? String, let capability = capabilities[id], isFormatOne(json),
+        let (api, minimum, permissions) = try compatibility(json)
+        guard let id = json["id"] as? String, let capability = capabilities[id], let format = manifestFormat(json),
               json["capabilities"] as? [String] == [capability] else {
             throw PluginError("当前版本不支持此插件")
         }
@@ -434,19 +452,12 @@ enum PluginRepository {
         // 正式首版以 v1.0.0 起步，仍应更新此前已安装的预览版。
         let epoch: Int64? = json["versionEpoch"] == nil ? 0 : positiveInt(json["versionEpoch"])
         guard let epoch, (0...1).contains(epoch) else { throw PluginError("插件版本无效") }
-        let apiVersion = (json["apiVersion"] as? Int) ?? 1
-        // ⚠️ 必须用 Optional.map/flatMap：直接写 `(x as? String)?.trimmingCharacters(...)`
-        // 会让编译器把后面的 `.flatMap` 解析成 String 的 Sequence.flatMap（元素是 Character）
-        let minAppVersion: String? = (json["minAppVersion"] as? String)
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .flatMap { $0.isEmpty ? nil : $0 }
-        let permissions = (json["permissions"] as? [String]) ?? []
         return try PluginManifest(id: id, name: required("name", limit: 48),
                                   author: legacyAuthor ?? (legacyOwner ? "yehu-imei" : author), version: version,
                                   description: required("description", limit: 300), details: details,
                                   authorGithubID: authorID ?? legacyID, versionEpoch: Int(epoch),
-                                  apiVersion: apiVersion, minAppVersion: minAppVersion,
-                                  permissions: permissions)
+                                  apiVersion: api, minAppVersion: minimum,
+                                  permissions: permissions, formatVersion: format)
     }
 
     private static func packagePath(for manifest: PluginManifest) -> String? {
@@ -474,6 +485,11 @@ enum PluginRepository {
         guard let version = json["formatVersion"] as? NSNumber,
               CFGetTypeID(version) != CFBooleanGetTypeID() else { return false }
         return version.stringValue == "1"
+    }
+
+    private static func manifestFormat(_ json: [String: Any]) -> Int? {
+        guard let value = positiveInt(json["formatVersion"]), (1...2).contains(value) else { return nil }
+        return Int(value)
     }
 
     private static func positiveInt(_ value: Any?) -> Int64? {
